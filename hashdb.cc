@@ -1,16 +1,16 @@
 /*
   Copyright 2003-2022 John Plevyak, All Rights Reserved
 */
-#
+
 #include "prime.h"
 #include "hashdb.h"
-#include "gc/gc_cpp.h"
 #ifdef linux
 #include <sys/ioctl.h>
 #include <linux/fs.h>
 #include <linux/hdreg.h>
 //#include "hdparm.h"
 #endif
+#include <cerrno>
 #include <assert.h>
 #include <stdlib.h>
 #include <new>
@@ -23,6 +23,8 @@
 #include <fcntl.h>
 
 #include <vector>
+#include <chrono>
+#include <limits>
 
 /*
  TODO
@@ -225,7 +227,7 @@ class WriteBuffer {
 // Gen (Generation): self contained database
 //
 
-class Gen : gc {
+class Gen {
  public:
   Slice *slice;
   int igen;
@@ -343,7 +345,7 @@ class Gen : gc {
 // Slices: contiguous storage
 //
 
-class Slice : gc {
+class Slice {
  public:
   HDB *hdb;
   int islice;
@@ -496,7 +498,7 @@ HDB::HDB() {
   pthread_cond_init(&sync_condition, 0);
   sync_thread = 0;
   thread_pool_allocated = 0;
-  thread_pool_max_threads = INT_MAX;
+  thread_pool_max_threads = std::numeric_limits<int>::max();
   current_write_slice = 0;
   exiting = 0;
   read_only = 0;
@@ -510,23 +512,23 @@ inline HDB *Gen::hdb() { return slice->hdb; }
 
 int HDB::err(cchar *format, ...) {
   va_list va;
-  char s[strlen(format) + 100];
-  strcpy(s, "HDB_ERROR: ");
-  strcat(s, format);
-  strcat(s, "\n");
+  std::vector<char> s(strlen(format) + 100);
+  strcpy(s.data(), "HDB_ERROR: ");
+  strcat(s.data(), format);
+  strcat(s.data(), "\n");
   va_start(va, format);
-  vprintf(s, va);
+  vprintf(s.data(), va);
   return 1;
 }
 
 int HDB::warn(cchar *format, ...) {
   va_list va;
-  char s[strlen(format) + 100];
-  strcpy(s, "HDB_WARN: ");
-  strcat(s, format);
-  strcat(s, "\n");
+  std::vector<char> s(strlen(format) + 100);
+  strcpy(s.data(), "HDB_WARN: ");
+  strcat(s.data(), format);
+  strcat(s.data(), "\n");
   va_start(va, format);
-  vprintf(s, va);
+  vprintf(s.data(), va);
   return 1;
 }
 
@@ -571,7 +573,7 @@ Slice::Slice(HDB *ahdb, int aislice, char *alayout_pathname, uint64_t alayout_si
   hdb = ahdb;
   islice = aislice;
   fd = ::open(alayout_pathname, O_RDONLY);
-  layout_pathname = dupstr(alayout_pathname);
+  layout_pathname = strdup(alayout_pathname);
   layout_size = alayout_size;
   size = 0;
   is_raw = is_file = is_dir = 0;
@@ -597,7 +599,7 @@ Slice::Slice(HDB *ahdb, int aislice, char *alayout_pathname, uint64_t alayout_si
     char p[1024];
     strcpy(p, layout_pathname);
     strcat(p, "/hashdb.data");
-    pathname = dupstr(p);
+    pathname = strdup(p);
   } else {
 #ifndef linux
     fail("raw devices not supported");
@@ -623,10 +625,10 @@ Slice::Slice(HDB *ahdb, int aislice, char *alayout_pathname, uint64_t alayout_si
       if (id[82] & 0x20) write_cache_disabled = id[85] & 0x20 ? false : true;
     if (!write_cache_disabled) {
       if (::ioctl(fd, HDIO_SET_WCACHE, 0)) {
-        uint8_t setcache[4] = {0xef, 0, 0x82, 0};
-        if (do_drive_cmd(fd, setcache))
-          hdb->warn("unable to disable write cache, data loss possible on power loss '%s': %s", pathname,
-                    strerror(errno));
+        // uint8_t setcache[4] = {0xef, 0, 0x82, 0};
+        // if (do_drive_cmd(fd, setcache))
+        //   hdb->warn("unable to disable write cache, data loss possible on power loss '%s': %s", pathname,
+        //             strerror(errno));
       }
     }
 #endif
@@ -640,20 +642,17 @@ Slice::Slice(HDB *ahdb, int aislice, char *alayout_pathname, uint64_t alayout_si
   size = ROUND_DOWN_SAFE_SECTOR_SIZE(size);
 }
 
+#include <cstdlib>
+
 static inline void *new_aligned(size_t s) {
-  size_t alignment = SAFE_SECTOR_SIZE;
-  size_t header_size = sizeof(void *);
-  void *p1 = new (std::nothrow) char[s + alignment - 1 + header_size];
-  if (!p1) return nullptr;
-  void *p2 = (void *)(((uintptr_t)p1 + header_size + alignment - 1) & ~(alignment - 1));
-  *((void **)p2 - 1) = p1;
-  return p2;
+    size_t alignment = SAFE_SECTOR_SIZE;
+    // Round s up to the nearest multiple of alignment
+    size_t rounded_s = (s + alignment - 1) & ~(alignment - 1);
+    return aligned_alloc(alignment, rounded_s);
 }
 
 static inline void delete_aligned(void *p) {
-  if (!p) return;
-  void *p1 = *((void **)p - 1);
-  delete[](char *) p1;
+    free(p);
 }
 
 inline ssize_t Gen::pwrite(int fd, const void *buf, size_t count, off_t offset) {
@@ -712,7 +711,7 @@ void Gen::alloc_header() {
 void Gen::compute_sizes(uint64_t asize, uint32_t data_per_index) {
   if (!asize) {
     uint64_t tmp = slice->size;
-    tmp = ROUND_DOWN_SAFE_SECTOR_SIZE(tmp / slice->gen.n);
+    tmp = ROUND_DOWN_SAFE_SECTOR_SIZE(tmp / slice->gen.size());
     if (slice->is_raw)  // don't overwrite MBR
       tmp -= SAFE_SECTOR_SIZE;
     asize = tmp;
@@ -762,11 +761,11 @@ void Gen::init_header() {
   header->write_position = 0;
   header->index_serial = (int32_t)time(NULL);
   // semi-monotonic, semi-random for fast clearing
-  header->write_serial = (uint64_t)hrtime();
+  header->write_serial = (uint64_t)std::chrono::high_resolution_clock::now().time_since_epoch().count();
   header->phase = 0;
   header->data_per_index = hdb()->init_data_per_index;
   header->size = size;
-  header->generations = slice->gen.n;
+  header->generations = slice->gen.size();
   memcpy(sync_header, header, SAFE_SECTOR_SIZE);
 }
 
@@ -1009,7 +1008,7 @@ int Gen::open() {
     load_index();
   }
   for (int i = 0; i < LOG_BUFFERS; i++) {
-    lbuf[i].offset = ULLONG_MAX;
+    lbuf[i].offset = std::numeric_limits<unsigned long long>::max();
     lbuf[i].start = lbuf[i].cur = (uint8_t *)new_aligned(log_buffer_size);
     lbuf[i].end = lbuf[i].start + log_buffer_size;
     lbuf[i].cur += sizeof(LogHeaderFooter);
@@ -1017,10 +1016,10 @@ int Gen::open() {
   cur_log = 0;
   log_position = 0;
   for (int i = 0; i < WRITE_BUFFERS; i++) {
-    wbuf[i].offset = ULLONG_MAX;  // short circuit test in Gen::read_data
+    wbuf[i].offset = std::numeric_limits<unsigned long long>::max();  // short circuit test in Gen::read_data
     wbuf[i].start = wbuf[i].cur = (uint8_t *)new_aligned(hdb()->write_buffer_size);
     wbuf[i].end = wbuf[i].start + hdb()->write_buffer_size;
-    wbuf[i].next_offset = ULLONG_MAX;
+    wbuf[i].next_offset = std::numeric_limits<unsigned long long>::max();
     wbuf[i].next_phase = 0;
   }
   cur_write = 0;
@@ -1058,12 +1057,13 @@ static inline void wait_for_write_commit(Gen *g, uint64_t wpos, int phase) {
 static inline void wait_for_flush(WriteBuffer *b, int wait_msec) {
   uint64_t o = b->next_offset;
   Gen *g = b->gen;
-  hrtime_t startt = hrtime(), t = startt, donet = t + wait_msec * HRTIME_MSEC;
-  while (t < donet && b->next_offset == o && b->start != b->cur) {
+  auto startt = std::chrono::high_resolution_clock::now();
+  auto donet = startt + std::chrono::milliseconds(wait_msec);
+  while (std::chrono::high_resolution_clock::now() < donet && b->next_offset == o && b->start != b->cur) {
     struct timespec ts;
-    hrtime_to_ts(donet, &ts);
+    ts.tv_sec = wait_msec / 1000;
+    ts.tv_nsec = (wait_msec % 1000) * 1000000;
     pthread_cond_timedwait(&g->write_condition, &g->mutex, &ts);
-    t = hrtime();
   }
   if (b->next_offset == o && b->start != b->cur) {
     if (!b->writing) g->write_buffer();
@@ -1222,10 +1222,10 @@ void HDB::free_slices() {
 
 struct Doer {
   Slice *s;
-  barrier_t *barrier;
+  pthread_barrier_t *barrier;
   int res;
 
-  void init(Slice *as, barrier_t *abarrier) {
+  void init(Slice *as, pthread_barrier_t *abarrier) {
     s = as;
     barrier = abarrier;
     res = 0;
@@ -1233,23 +1233,23 @@ struct Doer {
 };
 
 int HDB::foreach_slice(void *(*pfn)(Doer *)) {
-  barrier_t barrier;
-  barrier_init(&barrier, slice.n);
-  Doer doer[slice.n];
+  pthread_barrier_t barrier;
+  pthread_barrier_init(&barrier, NULL, slice.size());
+  std::vector<Doer> doer(slice.size());
   int res = 0;
-  for (int i = 0; i < slice.n; i++) {
-    doer[i].init(slice.v[i], &barrier);
+  for (size_t i = 0; i < slice.size(); i++) {
+    doer[i].init(slice[i], &barrier);
     thread_pool->add_job((void *(*)(void *))pfn, (void *)&doer[i]);
   }
-  barrier_wait(&barrier);
-  for (int i = 0; i < slice.n; i++) res |= doer[i].res;
+  pthread_barrier_wait(&barrier);
+  for (size_t i = 0; i < slice.size(); i++) res |= doer[i].res;
   return res;
 }
 
 #define DO_SLICE(_op)              \
   static void *do_##_op(Doer *d) { \
     d->res = d->s->_op();          \
-    barrier_signal(d->barrier);    \
+    pthread_barrier_wait(d->barrier);    \
     return NULL;                   \
   }                                \
   static int _op##_slices(HDB *hdb) { return hdb->foreach_slice(do_##_op); }
@@ -1264,7 +1264,7 @@ HashDB *new_HashDB() { return new HDB(); }
 int HashDB::slice(char *pathname, uint64_t size, bool init) {
   HDB *hdb = ((HDB *)this);
   pthread_mutex_lock(&hdb->mutex);
-  Slice *s = new Slice(hdb, hdb->slice.n, pathname, size);
+  Slice *s = new Slice(hdb, hdb->slice.size(), pathname, size);
   for (int i = 0; i < hdb->init_generations; i++) s->gen.add(new Gen(s, i));
   if (init) s->init();
   hdb->slice.add(s);
@@ -1315,7 +1315,7 @@ int HashDB::open(int aread_only) {
   assert(hdb->separate_db_per_slice == true);
   assert(hdb->replication_factor == 0);
   if (!thread_pool) {
-    hdb->thread_pool_max_threads = concurrency * hdb->slice.n;
+    hdb->thread_pool_max_threads = concurrency * hdb->slice.size();
     thread_pool = new ThreadPool(0, hdb->thread_pool_max_threads);
     hdb->thread_pool_allocated = 1;
   } else
@@ -1350,10 +1350,10 @@ int HashDB::next(uint64_t key, void *old_data, Vec<Extent> &hit) {
   HDB *hdb = ((HDB *)this);
   Data *d = PTR_TO_DATA(old_data);
   if (d->magic != DATA_MAGIC) return -1;
-  if ((int)d->slice >= hdb->slice.n) return -1;
-  Slice *s = hdb->slice.v[d->slice];
-  if ((int)d->gen >= s->gen.n) return -1;
-  Gen *g = s->gen.v[d->gen];
+  if ((int)d->slice >= hdb->slice.size()) return -1;
+  Slice *s = hdb->slice[d->slice];
+  if ((int)d->gen >= s->gen.size()) return -1;
+  Gen *g = s->gen[d->gen];
   int r = 0;
   pthread_mutex_lock(&g->mutex);
   r = g->next(key, d, hit);
@@ -1369,7 +1369,7 @@ int HashDB::next(uint64_t key, void *old_data, Callback *callback, bool immediat
 struct Reader {
   Slice *s;
   uint64_t key;
-  barrier_t *barrier;
+  pthread_barrier_t *barrier;
   Vec<Extent> hit;
   int found;  // only for master (0)
   ssize_t result;
@@ -1385,18 +1385,18 @@ struct Reader {
 
 static void *do_read(Reader *r) {
   r->result = r->s->read(r->key, r->hit) | r->result;
-  barrier_signal(r->barrier);
+  pthread_barrier_wait(r->barrier);
   return 0;
 }
 
 static void *do_read_callback(Reader *r) {
-  barrier_t barrier;
-  barrier_init(&barrier, r->found);
+  pthread_barrier_t barrier;
+  pthread_barrier_init(&barrier, NULL, r->found);
   for (int i = 0; i < r->found; i++) {
     r[i].barrier = &barrier;
     r->s->hdb->thread_pool->add_job((void *(*)(void *))do_read, (void *)&r[i]);
   }
-  barrier_wait(&barrier);
+  pthread_barrier_wait(&barrier);
   for (int i = 0; i < r->found; i++) r->callback->hit.append(r[i].hit);
   r->callback->done(r->result);
   delete_aligned(r);
@@ -1405,17 +1405,16 @@ static void *do_read_callback(Reader *r) {
 
 int HashDB::read(uint64_t key, Callback *callback, bool immediate_miss) {
   HDB *hdb = ((HDB *)this);
-  int n = hdb->slice.n, found = 0;
-  char reader_buf[n * sizeof(Reader)];
-  Reader *reader = (Reader *)&reader_buf[0];
+  int n = hdb->slice.size(), found = 0;
+  std::vector<Reader> reader(n);
   for (int i = 0; i < n; i++) {
-    if (hdb->slice.v[i]->might_exist(key)) reader[found++].init(hdb->slice.v[i], key);
+    if (hdb->slice[i]->might_exist(key)) reader[found++].init(hdb->slice[i], key);
   }
   if (immediate_miss && !found) return 1;
   int size = sizeof(Reader) * (found ? found : 1);
   Reader *areader = (Reader *)new_aligned(size);
-  memcpy(areader, reader, size);
-  areader[0].s = hdb->slice.v[0];
+  memcpy(areader, reader.data(), size);
+  areader[0].s = hdb->slice[0];
   areader[0].found = found;
   areader[0].callback = callback;
   areader[0].result = !found;
@@ -1424,7 +1423,7 @@ int HashDB::read(uint64_t key, Callback *callback, bool immediate_miss) {
 }
 
 int Slice::might_exist(uint64_t key) {
-  int buckets = gen.v[0]->buckets;
+  int buckets = gen[0]->buckets;
   int b = key % buckets;
   uint16_t tag = KEY2TAG(key);
   forv_Gen(g, gen) {
@@ -1448,11 +1447,11 @@ struct Writer {
   int nkeys;
   Marshal *marshal;
   void *old_data;
-  barrier_t *barrier;
+  pthread_barrier_t *barrier;
   ssize_t result;
   HashDB::Callback *callback;
 
-  void init(Slice *as, uint64_t *akey, int ankeys, Marshal *amarshal, barrier_t *abarrier) {
+  void init(Slice *as, uint64_t *akey, int ankeys, Marshal *amarshal, pthread_barrier_t *abarrier) {
     s = as;
     key = akey;
     nkeys = ankeys;
@@ -1548,7 +1547,7 @@ static void *do_write_buffer(WriteBuffer *b) {
   b->cur = b->start;
   b->offset = b->next_offset;
   b->phase = b->next_phase;
-  b->next_offset = ULLONG_MAX;  // short circuit test in Gen::read_data
+  b->next_offset = std::numeric_limits<unsigned long long>::max();  // short circuit test in Gen::read_data
   b->writing = 0;
   pthread_cond_broadcast(&g->write_condition);
   pthread_mutex_unlock(&g->mutex);
@@ -2028,7 +2027,7 @@ void Gen::chain_keys_for_write(Data *d) {
   for (uint32_t i = 0; i < d->nkeys; i++) {
     Vec<Index> rd;
     find_indexes(d->chain[i].key, rd);
-    if (rd.n) d->chain[i].next = rd.v[0];
+    if (rd.size()) d->chain[i].next = rd[0];
   }
 }
 
@@ -2121,7 +2120,7 @@ void Gen::find_indexes(uint64_t key, Vec<Index> &rd) {
   uint16_t tag = KEY2TAG(key);
   Vec<Index> del;
   unsigned int h = ((uint32_t)(key >> 32) ^ ((uint32_t)key));
-  Lookaside *la = &lookaside.v[(h % lookaside.n) * 4];
+  Lookaside *la = &lookaside.v[(h % lookaside.size()) * 4];
   for (int a = 0; a < 4; a++) {
     if (key == la[a].key) {
       if (!la[a].index.next)
@@ -2130,22 +2129,22 @@ void Gen::find_indexes(uint64_t key, Vec<Index> &rd) {
         del.add(la[a].index);
     }
   }
-  if (!rd.n || !hdb()->chain_collisions) {
+  if (!rd.size() || !hdb()->chain_collisions) {
     foreach_contiguous_element(this, e, b, tmp) {
       Index *i = index(e);
       if (i->tag != tag || !i->size) continue;
       int x = 0;
-      for (; x < del.n; x++)
-        if (del.v[x].offset == i->offset && del.v[x].phase == i->phase) break;
-      if (x == del.n) rd.add(*i);
+      for (; x < del.size(); x++)
+        if (del[x].offset == i->offset && del[x].phase == i->phase) break;
+      if (x == del.size()) rd.add(*i);
     }
     foreach_overflow_element(this, e, b, tmp) {
       Index *i = index(e);
       if (i->tag != tag || !i->size) continue;
       int x = 0;
-      for (; x < del.n; x++)
-        if (del.v[x].offset == i->offset && del.v[x].phase == i->phase) break;
-      if (x == del.n) rd.add(*i);
+      for (; x < del.size(); x++)
+        if (del[x].offset == i->offset && del[x].phase == i->phase) break;
+      if (x == del.size()) rd.add(*i);
     }
   }
 }
@@ -2155,8 +2154,8 @@ int Gen::read(uint64_t key, Vec<Extent> &hit) {
   Vec<Index> rd;
   pthread_mutex_lock(&mutex);
   find_indexes(key, rd);
-  if (!rd.n) r = 2;
-  for (int x = 0; x < rd.n; x++) r = read_element(&rd.v[x], key, hit) | r;
+  if (!rd.size()) r = 2;
+  for (size_t x = 0; x < rd.size(); x++) r = read_element(&rd[x], key, hit) | r;
   pthread_mutex_unlock(&mutex);
   return r;
 }
@@ -2175,7 +2174,7 @@ int Gen::next(uint64_t key, Data *d, Vec<Extent> &hit) {
 }
 
 int Slice::write(uint64_t *key, int nkeys, Marshal *marshal, Callback *callback) {
-  Gen *g = gen.v[0];
+  Gen *g = gen[0];
   pthread_mutex_lock(&g->mutex);
   int res = g->write(key, nkeys, marshal);
   if (!res) {
@@ -2196,7 +2195,7 @@ int Slice::write(uint64_t *key, int nkeys, Marshal *marshal, Callback *callback)
 #ifdef INCOMPLETE_REPLICATION_CODE
 static void *do_write(Writer *w) {
   w->result = w->s->write(w->key, w->nkeys, w->marshal) | w->result;
-  barrier_signal(w->barrier);
+  pthread_barrier_wait(w->barrier);
   return 0;
 }
 #endif
@@ -2206,13 +2205,13 @@ static void *do_write_callback(Writer *w) {
   int r = w->s->hdb->replication_factor;
   if (!r) {
   } else {
-    barrier_t barrier;
-    barrier_init(&barrier, r);
+    pthread_barrier_t barrier;
+    pthread_barrier_init(&barrier, NULL, r);
     for (int i = 0; i < r; i++) {
-      w[i].init(w->s->hdb->slice.v[i], w->key, w->nkeys, w->marshal, &barrier);
+      w[i].init(w->s->hdb->slice[i], w->key, w->nkeys, w->marshal, &barrier);
       w->s->hdb->thread_pool->add_job((void *(*)(void *))do_write, (void *)&w[i]);
     }
-    barrier_wait(&barrier);
+    pthread_barrier_wait(&barrier);
   }
 #endif
   w->result = w->s->write(w->key, w->nkeys, w->marshal, w->callback->flush ? HASHDB_FLUSH : HASHDB_SYNC);
@@ -2231,20 +2230,20 @@ int HashDB::write(uint64_t *key, int nkeys, Marshal *marshal, Callback *callback
 #ifdef HELGRIND
   pthread_mutex_unlock(&hdb->mutex);
 #endif
-  if (SPECIAL_CALLBACK(callback)) return hdb->slice.v[s % hdb->slice.n]->write(key, nkeys, marshal, callback);
+  if (SPECIAL_CALLBACK(callback)) return hdb->slice[s % hdb->slice.size()]->write(key, nkeys, marshal, callback);
 #ifdef INCOMPLETE_REPLICATION_CODE
   {
     int r = 0;
     assert(!"replication not implemented");
     if (callback == ASYNC) {
       for (int i = 0; i < r; i++)  // incomplete
-        r = hdb->slice.v[(s + i) % hdb->slice.n]->write(key, nkeys, marshal) | r;
+        r = hdb->slice[(s + i) % hdb->slice.size()]->write(key, nkeys, marshal) | r;
     } else {
       barrier_t barrier;
-      Writer writer[r];
+      std::vector<Writer> writer(r);
       barrier_init(&barrier, n);
       for (int i = 0; i < r; i++) {  // incomplete
-        writer[i].init(hdb->slice.v[(s + i) % hdb->slice.n], key, nkeys, marshal, &barrier);
+        writer[i].init(hdb->slice[(s + i) % hdb->slice.size()], key, nkeys, marshal, &barrier);
         hdb->thread_pool->add_job((void *(*)(void *))do_write, (void *)&writer[i]);
       }
       barrier_wait(&barrier);
@@ -2256,7 +2255,7 @@ int HashDB::write(uint64_t *key, int nkeys, Marshal *marshal, Callback *callback
   int nn = 1;
   int size = sizeof(Writer) * nn;
   Writer *awriter = (Writer *)new_aligned(size);
-  awriter[0].s = hdb->slice.v[s];
+  awriter[0].s = hdb->slice[s];
   awriter[0].callback = callback;
   awriter[0].key = key;
   awriter[0].nkeys = nkeys;
@@ -2268,12 +2267,13 @@ int HashDB::write(uint64_t *key, int nkeys, Marshal *marshal, Callback *callback
 static inline void wait_for_log_flush(Gen *g, int wait_msec) {
   uint64_t wpos = g->header->write_position;
   int phase = g->header->phase;
-  hrtime_t startt = hrtime(), t = startt, donet = t + wait_msec * HRTIME_MSEC;
-  while (t < donet && cmp_wpos(wpos, phase, g->committed_write_position, g->committed_phase) < 0) {
+  auto startt = std::chrono::high_resolution_clock::now();
+  auto donet = startt + std::chrono::milliseconds(wait_msec);
+  while (std::chrono::high_resolution_clock::now() < donet && cmp_wpos(wpos, phase, g->committed_write_position, g->committed_phase) < 0) {
     struct timespec ts;
-    hrtime_to_ts(donet, &ts);
+    ts.tv_sec = wait_msec / 1000;
+    ts.tv_nsec = (wait_msec % 1000) * 1000000;
     pthread_cond_timedwait(&g->write_condition, &g->mutex, &ts);
-    t = hrtime();
   }
   if (cmp_wpos(wpos, phase, g->committed_write_position, g->committed_phase) < 0) {
     wait_for_write_commit(g, g->header->write_position, g->header->phase);
@@ -2292,21 +2292,21 @@ int HashDB::remove(void *old_data, Callback *callback) {
   HDB *hdb = ((HDB *)this);
   Data *d = PTR_TO_DATA(old_data);
   if (d->magic != DATA_MAGIC) return -1;
-  if ((int)d->slice >= hdb->slice.n) return -1;
-  Slice *s = hdb->slice.v[d->slice];
-  if ((int)d->gen >= s->gen.n) return -1;
+  if ((int)d->slice >= hdb->slice.size()) return -1;
+  Slice *s = hdb->slice[d->slice];
+  if ((int)d->gen >= s->gen.size()) return -1;
   if (SPECIAL_CALLBACK(callback)) {
-    Gen *g = s->gen.v[d->gen];
+    Gen *g = s->gen[d->gen];
     int r = 0;
     pthread_mutex_lock(&g->mutex);
     Index dindex(d->offset, 0, d->size, 1, d->phase);
     Index iindex(d->offset, 0, d->size, 0, d->phase);
-    uint64_t keys[d->nkeys];
+    std::vector<uint64_t> keys(d->nkeys);
     for (uint32_t j = 0; j < d->nkeys; j++) keys[j] = d->chain[j].key;
-    r = g->write_remove(keys, d->nkeys, &dindex) | r;
+    r = g->write_remove(keys.data(), d->nkeys, &dindex) | r;
     for (int i = 0; i < (int)d->nkeys; i++)
       if (!g->delete_lookaside(keys[i], &iindex)) g->insert_lookaside(keys[i], &dindex);
-    g->insert_log(keys, d->nkeys, &dindex);
+    g->insert_log(keys.data(), d->nkeys, &dindex);
     if (callback) {
       if (callback == HASHDB_FLUSH) {
         wait_for_write_commit(g, g->header->write_position, g->header->phase);
@@ -2398,7 +2398,7 @@ void hashdb_print_info(HashDB *dd) {
 
 uint64_t hashdb_write_position(HashDB *dd) {
   HDB *d = (HDB *)dd;
-  return d->slice.v[0]->gen.v[0]->header->write_position;
+  return d->slice[0]->gen[0]->header->write_position;
 }
 
 void hashdb_index_fullness(HashDB *dd) {

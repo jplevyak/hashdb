@@ -8,8 +8,6 @@
 #include <cstdint>
 #include <vector>
 
-#include <gc/gc_cpp.h>
-
 class ThreadPool;
 
 #define HASHDB_SLICE_SIZE_MAX ((uint64_t)-1)
@@ -17,7 +15,7 @@ class ThreadPool;
 #define HASHDB_FLUSH ((HashDB::Callback *)(uintptr_t)1)  // flush immediately
 #define HASHDB_ASYNC ((HashDB::Callback *)(uintptr_t)0)  // do not wait for flush
 
-class HashDB : gc {
+class HashDB {
  public:
   class Callback;
   static HashDB::Callback *SYNC;
@@ -31,7 +29,7 @@ class HashDB : gc {
   };
 
   // callback after write equivalent to HASHDB_SYNC
-  class Callback : gc {
+  class Callback {
    public:
     typedef void (*cb_fn_t)(int);
     cb_fn_t callbackfn;
@@ -130,8 +128,8 @@ HashDB *new_HashDB();
   db->write(0x1234123412341234ul, buf, 128);
   std::vector<void*> hits;
   db->read(0x1234123412341234ul, hits);
-  for (int i = 0; i < hits.n; i++)
-    free_chunk(hits.v[i]);
+  for (size_t i = 0; i < hits.size(); i++)
+    free_chunk(hits[i]);
   db->close();
   delete db;
 */
