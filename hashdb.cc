@@ -3,13 +3,13 @@
 */
 #
 #include "prime.h"
-// #include "hashdb.h"
+#include "hashdb.h"
 #include "gc/gc_cpp.h"
 #ifdef linux
 #include <sys/ioctl.h>
 #include <linux/fs.h>
 #include <linux/hdreg.h>
-#include "hdparm.h"
+//#include "hdparm.h"
 #endif
 #include <assert.h>
 #include <stdlib.h>
