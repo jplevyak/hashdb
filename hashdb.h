@@ -17,8 +17,16 @@ class ThreadPool;
 #define HASHDB_FLUSH ((HashDB::Callback *)(uintptr_t)1)  // flush immediately
 #define HASHDB_ASYNC ((HashDB::Callback *)(uintptr_t)0)  // do not wait for flush
 
-class HashDB : gc {
+#include <new>
+
+class HashDB : public gc {
  public:
+  void* operator new(size_t size) {
+    void* p = GC_MALLOC(size);
+    if (!p) throw std::bad_alloc();
+    return p;
+  }
+  void operator delete(void* ptr) { GC_FREE(ptr); }
   class Callback;
   static HashDB::Callback *SYNC;
   static HashDB::Callback *FLUSH;
