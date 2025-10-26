@@ -12,6 +12,7 @@
 //#include "hdparm.h"
 #endif
 #include <cerrno>
+#include <cinttypes>
 #include <assert.h>
 #include <stdlib.h>
 #include <new>
@@ -146,7 +147,7 @@ const static char *DEBUG_LOG_TYPE_NAME[] = {"empty ", "set   ", "delete ", "ins 
 class HDB;
 class Gen;
 class Slice;
-class Doer;
+struct Doer;
 struct Data;
 struct LogHeaderFooter;
 struct LogEntry;
@@ -495,8 +496,6 @@ static inline uint32_t length_to_size(uint64_t l) {
 
 static inline uint64_t size_to_length(uint64_t s) { return (s & 255) * ((1 << ((s >> 8) * 4)) * DATA_BLOCK_SIZE); }
 
-static inline uint64_t lenth_to_size_length(uint64_t l) { return size_to_length(length_to_size(l)); }
-
 class HDB : public HashDB {
  public:
   Vec<Slice *> slice;
@@ -596,7 +595,7 @@ void Gen::init_debug_log() {
 Gen::Gen(Slice *aslice, int aigen) {
   pthread_mutex_init(&mutex, 0);
   pthread_mutex_lock(&mutex);
-  memset(this, 0, sizeof(*this));
+  memset((void*)this, 0, sizeof(*this));
   slice = aslice;
   igen = aigen;
   for (int i = 0; i < LOG_BUFFERS; i++) lbuf[i].init(this, i);
@@ -739,7 +738,7 @@ void Gen::dump_debug_log() {
   while (p - debug_log + sizeof(DebugLogEntry) < DEBUG_LOG_SIZE) {
     DebugLogEntry *e = (DebugLogEntry *)p;
     if (!e->get_tag()) break;
-    printf("%s %llu %p\n", DEBUG_LOG_TYPE_NAME[e->get_tag()], e->key, e->get_i());
+    printf("%s %lu %p\n", DEBUG_LOG_TYPE_NAME[e->get_tag()], e->key, e->get_i());
     p += sizeof(DebugLogEntry);
   }
 }
@@ -1204,7 +1203,7 @@ static int verify_element(Gen *g, int e) {
   if (verify_offset(g, i)) return -1;
   Data *d = g->read_data(i);
   if (!d) return -1;
-  printf("key %llu size %d off %d\n", d->chain[0].key, d->size, i->offset);
+  printf("key %lu size %d off %d\n", d->chain[0].key, d->size, i->offset);
   delete_aligned(d);
   return 0;
 }
@@ -1250,9 +1249,8 @@ int Slice::verify() {
 }
 
 int Slice::close() {
-  int res = 0;
   forv_Gen(g, gen) {
-    res = g->close();
+    g->close();
     DELETE(g);
   }
   return 0;
@@ -2435,7 +2433,7 @@ void hashdb_print_info(HashDB *dd) {
   HDB *d = (HDB *)dd;
   forv_Slice(slice, d->slice) {
     forv_Gen(g, slice->gen) {
-      printf("Slice %d Gen %d size %lld phase %d\n", slice->islice, g->igen, g->header->size, g->header->phase);
+      printf("Slice %d Gen %d size %lu phase %d\n", slice->islice, g->igen, g->header->size, g->header->phase);
     }
   }
 }
@@ -2456,7 +2454,6 @@ void hashdb_index_fullness(HashDB *dd) {
     forv_Gen(g, slice->gen) {
       for (uint32_t b = 0; b < g->buckets; b++) {
         x = 0;
-        int tmp;
         foreach_contiguous_element(g, e, b, tmp) if (g->index(e)->size) x++;
         assert(x < 9);
         bcount[x]++;

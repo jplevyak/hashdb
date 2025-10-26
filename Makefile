@@ -147,7 +147,7 @@ endif
 ALL_SRCS = $(LIB_SRCS) $(LIB_SRCS) $(TEST_LIB_SRCS)
 DEPEND_SRCS = $(ALL_SRCS)
 
-all: $(LIBRARY) $(TEST_LIB) test LICENSE.i COPYRIGHT.i
+all: $(LIBRARY) test LICENSE.i COPYRIGHT.i
 
 version:
 	@echo $(MODULE) $(MAJOR).$(MINOR).$(BUILD_VERSION) '('$(OS_TYPE) $(OS_VERSION)')' $(CFLAGS)
@@ -173,7 +173,7 @@ test: $(TEST_EXEC)
 	./$(TEST_EXEC)
 
 clean:
-	\rm -f *.o core *.core *.gmon $(EXEC_FILES) LICENSE.i COPYRIGHT.i $(EXECUTABLES) $(CLEAN_FILES) $(TEST_LIB)
+	\rm -f *.o core *.core *.gmon LICENSE.i COPYRIGHT.i $(EXECUTABLES) $(TEST_EXEC)
 
 realclean: clean
 	\rm -f *.a *.orig *.rej svn-commit.tmp
