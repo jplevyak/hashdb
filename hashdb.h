@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <vector>
 
-class ThreadPool;
+#include "threadpool.h"
 
 #define HASHDB_SLICE_SIZE_MAX ((uint64_t)-1)
 #define HASHDB_SYNC ((HashDB::Callback *)(uintptr_t)2)   // wait at most sync_wait_msec

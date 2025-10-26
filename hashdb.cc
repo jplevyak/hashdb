@@ -4,6 +4,7 @@
 
 #include "prime.h"
 #include "hashdb.h"
+#include "threadpool.h"
 #ifdef linux
 #include <sys/ioctl.h>
 #include <linux/fs.h>
@@ -17,6 +18,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <cstdarg>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -25,6 +27,40 @@
 #include <vector>
 #include <chrono>
 #include <limits>
+
+template <class K, class HF>
+class NBlockHash {
+ public:
+  std::vector<K> v;
+  uint32_t n;
+  void resize(uint32_t N) {
+    n = N;
+    v.resize(n * 4);
+  }
+  void clear() { v.clear(); }
+  int count() { return 0; }
+  void put(K l) {
+    uint32_t h = HF::hash(l);
+    K *p = &v[(h % n) * 4];
+    for (int i = 0; i < 4; i++) {
+      if (!p[i]) {
+        p[i] = l;
+        return;
+      }
+    }
+  }
+  int del(K l) {
+    uint32_t h = HF::hash(l);
+    K *p = &v[(h % n) * 4];
+    for (int i = 0; i < 4; i++) {
+      if (HF::equal(p[i], l)) {
+        p[i] = K(0);
+        return 1;
+      }
+    }
+    return 0;
+  }
+};
 
 /*
  TODO
@@ -78,6 +114,13 @@
 #define ROUND_DOWN_SAFE_SECTOR_SIZE(_x) ROUND_DOWN(_x, SAFE_SECTOR_SIZE)
 #define KEY2TAG(_x) ((_x) >> 48)
 #define MODULAR_DIFFERENCE(_x, _y, _m) (((_x) + (_m) - (_y)) % (_m))
+
+#define forv_Vec(_type, _x, _v) for (auto _x : _v)
+#define DELETE(p) \
+  do {            \
+    delete (p);   \
+    (p) = NULL;   \
+  } while (0)
 
 #define DEBUG_LOG_SIZE (1 << 27)  // 128 MB
 #define DEBUG_LOG_FILENAME "hashdb.debuglog."
@@ -1092,7 +1135,7 @@ Lagain:
 void Gen::write_index_part(int p) {
   clean_index_part(p);
   uint64_t o = INDEX_BYTES_PER_PART * p;
-  byte *b = ((uint8_t *)raw_index) + o;
+  uint8_t *b = ((uint8_t *)raw_index) + o;
   int l = INDEX_BYTES_PER_PART;
   if (p >= index_parts - 1) l = index_size - o;
   memcpy(sync_buffer, b, l);
@@ -1161,7 +1204,7 @@ static int verify_element(Gen *g, int e) {
   if (verify_offset(g, i)) return -1;
   Data *d = g->read_data(i);
   if (!d) return -1;
-  if (verbose_level) printf("key %llu size %d off %d\n", d->chain[0].key, d->size, i->offset);
+  printf("key %llu size %d off %d\n", d->chain[0].key, d->size, i->offset);
   delete_aligned(d);
   return 0;
 }
@@ -1265,9 +1308,9 @@ int HashDB::slice(char *pathname, uint64_t size, bool init) {
   HDB *hdb = ((HDB *)this);
   pthread_mutex_lock(&hdb->mutex);
   Slice *s = new Slice(hdb, hdb->slice.size(), pathname, size);
-  for (int i = 0; i < hdb->init_generations; i++) s->gen.add(new Gen(s, i));
+  for (int i = 0; i < hdb->init_generations; i++) s->gen.push_back(new Gen(s, i));
   if (init) s->init();
-  hdb->slice.add(s);
+  hdb->slice.push_back(s);
   pthread_mutex_unlock(&hdb->mutex);
   return 0;
 }
@@ -1316,7 +1359,7 @@ int HashDB::open(int aread_only) {
   assert(hdb->replication_factor == 0);
   if (!thread_pool) {
     hdb->thread_pool_max_threads = concurrency * hdb->slice.size();
-    thread_pool = new ThreadPool(0, hdb->thread_pool_max_threads);
+    thread_pool = new ThreadPool(hdb->thread_pool_max_threads);
     hdb->thread_pool_allocated = 1;
   } else
     hdb->thread_pool_allocated = 0;
@@ -1397,7 +1440,7 @@ static void *do_read_callback(Reader *r) {
     r->s->hdb->thread_pool->add_job((void *(*)(void *))do_read, (void *)&r[i]);
   }
   pthread_barrier_wait(&barrier);
-  for (int i = 0; i < r->found; i++) r->callback->hit.append(r[i].hit);
+  for (int i = 0; i < r->found; i++) r->callback->hit.insert(r->callback->hit.end(), r[i].hit.begin(), r[i].hit.end());
   r->callback->done(r->result);
   delete_aligned(r);
   return 0;
@@ -1413,7 +1456,7 @@ int HashDB::read(uint64_t key, Callback *callback, bool immediate_miss) {
   if (immediate_miss && !found) return 1;
   int size = sizeof(Reader) * (found ? found : 1);
   Reader *areader = (Reader *)new_aligned(size);
-  memcpy(areader, reader.data(), size);
+  for (int i = 0; i < found; i++) areader[i] = reader[i];
   areader[0].s = hdb->slice[0];
   areader[0].found = found;
   areader[0].callback = callback;
@@ -1738,7 +1781,7 @@ void Gen::clean_index_part(int p) {
   for (int i = s; i < ss; i++) clean_sector(s);
 }
 
-int Gen::check_data(Data *d, uint64_t o, uint64 l, uint32_t offset, int recovery) {
+int Gen::check_data(Data *d, uint64_t o, uint64_t l, uint32_t offset, int recovery) {
   if (d->magic != DATA_MAGIC) {
     if (!recovery) hdb()->err("bad data magic, slice %d generation %d offset %lld", slice->islice, igen, o);
     return -1;
@@ -2069,7 +2112,8 @@ int Gen::read_element(Index *i, uint64_t key, Vec<Extent> &hit) {
   if (!d) return 0;
   for (uint32_t x = 0; x < d->nkeys; x++) {
     if (d->chain[x].key == key) {
-      Extent &e = hit.add();
+      hit.push_back(Extent());
+      Extent &e = hit.back();
       e.data = DATA_TO_PTR(d);
       e.len = d->length;
       return 0;
@@ -2120,31 +2164,31 @@ void Gen::find_indexes(uint64_t key, Vec<Index> &rd) {
   uint16_t tag = KEY2TAG(key);
   Vec<Index> del;
   unsigned int h = ((uint32_t)(key >> 32) ^ ((uint32_t)key));
-  Lookaside *la = &lookaside.v[(h % lookaside.size()) * 4];
+  Lookaside *la = &lookaside.v[(h % lookaside.v.size()) * 4];
   for (int a = 0; a < 4; a++) {
     if (key == la[a].key) {
       if (!la[a].index.next)
-        rd.add(la[a].index);
+        rd.push_back(la[a].index);
       else
-        del.add(la[a].index);
+        del.push_back(la[a].index);
     }
   }
   if (!rd.size() || !hdb()->chain_collisions) {
     foreach_contiguous_element(this, e, b, tmp) {
       Index *i = index(e);
       if (i->tag != tag || !i->size) continue;
-      int x = 0;
+      unsigned int x = 0;
       for (; x < del.size(); x++)
         if (del[x].offset == i->offset && del[x].phase == i->phase) break;
-      if (x == del.size()) rd.add(*i);
+      if (x == del.size()) rd.push_back(*i);
     }
     foreach_overflow_element(this, e, b, tmp) {
       Index *i = index(e);
       if (i->tag != tag || !i->size) continue;
-      int x = 0;
+      unsigned int x = 0;
       for (; x < del.size(); x++)
         if (del[x].offset == i->offset && del[x].phase == i->phase) break;
-      if (x == del.size()) rd.add(*i);
+      if (x == del.size()) rd.push_back(*i);
     }
   }
 }
@@ -2330,7 +2374,7 @@ int HashDB::remove(void *old_data, Callback *callback) {
 int HashDB::get_keys(void *old_data, Vec<uint64_t> &keys) {
   Data *d = PTR_TO_DATA(old_data);
   if (d->magic == DATA_MAGIC) return -1;
-  for (int i = 0; i < (int)d->nkeys; i++) keys.add(d->chain[i].key);
+  for (int i = 0; i < (int)d->nkeys; i++) keys.push_back(d->chain[i].key);
   return 0;
 }
 
@@ -2412,6 +2456,7 @@ void hashdb_index_fullness(HashDB *dd) {
     forv_Gen(g, slice->gen) {
       for (uint32_t b = 0; b < g->buckets; b++) {
         x = 0;
+        int tmp;
         foreach_contiguous_element(g, e, b, tmp) if (g->index(e)->size) x++;
         assert(x < 9);
         bcount[x]++;
@@ -2423,7 +2468,8 @@ void hashdb_index_fullness(HashDB *dd) {
       for (int s = 0; s < g->sectors(); s++) {
         x = 0;
         if (g->freelist_present(s)) {
-          int e = overflow_element(s, g->freelist_head(s)), n = e;
+          int e = overflow_element(s, g->freelist_head(s));
+          int n = e;
           do {
             e = n;
             x++;
