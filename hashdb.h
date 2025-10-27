@@ -3,24 +3,21 @@
 */
 #pragma once
 
-#include <string.h>
-
+#include <cstring>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "threadpool.h"
 
-#define HASHDB_SLICE_SIZE_MAX ((uint64_t)-1)
-#define HASHDB_SYNC ((HashDB::Callback *)(uintptr_t)2)   // wait at most sync_wait_msec
-#define HASHDB_FLUSH ((HashDB::Callback *)(uintptr_t)1)  // flush immediately
-#define HASHDB_ASYNC ((HashDB::Callback *)(uintptr_t)0)  // do not wait for flush
-
 class HashDB {
  public:
+  static constexpr uint64_t SLICE_SIZE_MAX = std::numeric_limits<uint64_t>::max();
+  static Callback *const SYNC;
+  static Callback *const FLUSH;
+  static Callback *const ASYNC;
+
   class Callback;
-  static HashDB::Callback *SYNC;
-  static HashDB::Callback *FLUSH;
-  static HashDB::Callback *ASYNC;
 
   struct Extent {
     void *data;
@@ -61,7 +58,7 @@ class HashDB {
   // The "size" is the size that will be used or allocated, and -1
   //   for file/dir or raw means use the existing or max size respectively.
   // If "init" is true, the slice will be initialized.
-  int slice(char *pathname, uint64_t size = HASHDB_SLICE_SIZE_MAX, bool init = false);
+  int slice(char *pathname, uint64_t size = SLICE_SIZE_MAX, bool init = false);
 
   int reinitialize();           // Reinitialize all slices (clear data).
   int open(int read_only = 0);  // Open all slices.

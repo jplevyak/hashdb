@@ -109,12 +109,35 @@ class NBlockHash {
 #define LOG_BUFFERS 2
 #define LOG_FOOTER_SIZE (sizeof(LogHeaderFooter))
 
-#define ROUND_TO(_x, _n) (((_x) + ((_n)-1)) & ~((_n)-1))
-#define ROUND_DOWN(_x, _n) ((_x) & ~((_n)-1))
-#define ROUND_DIV(_x, _n) (((_x) + ((_n)-1)) / (_n))
-#define ROUND_DOWN_SAFE_SECTOR_SIZE(_x) ROUND_DOWN(_x, SAFE_SECTOR_SIZE)
-#define KEY2TAG(_x) ((_x) >> 48)
-#define MODULAR_DIFFERENCE(_x, _y, _m) (((_x) + (_m) - (_y)) % (_m))
+template <typename T>
+[[nodiscard]] constexpr T round_to(const T x, const T n) noexcept {
+  return (x + (n - 1)) & ~(n - 1);
+}
+
+template <typename T>
+[[nodiscard]] constexpr T round_down(const T x, const T n) noexcept {
+  return x & ~(n - 1);
+}
+
+template <typename T>
+[[nodiscard]] constexpr T round_div(const T x, const T n) noexcept {
+  return (x + (n - 1)) / n;
+}
+
+[[nodiscard]] constexpr auto round_down_safe_sector_size(
+    const uint64_t x) noexcept {
+  return round_down(x, static_cast<uint64_t>(SAFE_SECTOR_SIZE));
+}
+
+[[nodiscard]] constexpr auto key_to_tag(const uint64_t x) noexcept {
+  return x >> 48;
+}
+
+template <typename T>
+[[nodiscard]] constexpr T modular_difference(const T x, const T y,
+                                             const T m) noexcept {
+  return (x + m - y) % m;
+}
 
 #define forv_Vec(_type, _x, _v) for (auto _x : _v)
 #define DELETE(p) \
@@ -156,9 +179,10 @@ typedef HashDB::Extent Extent;
 typedef HashDB::Marshal Marshal;
 typedef HashDB::Callback Callback;
 
-Callback *HashDB::SYNC = (Callback *)(uintptr_t)1;
-Callback *HashDB::FLUSH = (Callback *)(uintptr_t)2;
-Callback *HashDB::ASYNC = (Callback *)(uintptr_t)0;
+constexpr auto SYNC = reinterpret_cast<Callback *>(1);
+constexpr auto FLUSH = reinterpret_cast<Callback *>(2);
+constexpr auto ASYNC = reinterpret_cast<Callback *>(0);
+
 #define SPECIAL_CALLBACK(_c) (((uintptr_t)(_c)) <= 2)
 
 // should be no bigger than 512 bytes (one (small) sector size)
@@ -488,7 +512,7 @@ static inline uint32_t length_to_size(uint64_t l) {
   uint64_t b = DATA_BLOCK_SIZE;
   uint32_t m = 0;
   while (1) {
-    if (l < 256 * b) return (m << 8) + ROUND_DIV(l, b);
+    if (l < 256 * b) return (m << 8) + round_div(l, b);
     b <<= 4;
     m++;
   }
@@ -681,7 +705,7 @@ Slice::Slice(HDB *ahdb, int aislice, char *alayout_pathname, uint64_t alayout_si
     }
     size = layout_size;
   }
-  size = ROUND_DOWN_SAFE_SECTOR_SIZE(size);
+  size = round_down_safe_sector_size(size);
 }
 
 #include <cstdlib>
@@ -753,7 +777,7 @@ void Gen::alloc_header() {
 void Gen::compute_sizes(uint64_t asize, uint32_t data_per_index) {
   if (!asize) {
     uint64_t tmp = slice->size;
-    tmp = ROUND_DOWN_SAFE_SECTOR_SIZE(tmp / slice->gen.size());
+    tmp = round_down_safe_sector_size(tmp / slice->gen.size());
     if (slice->is_raw)  // don't overwrite MBR
       tmp -= SAFE_SECTOR_SIZE;
     asize = tmp;
@@ -777,8 +801,8 @@ void Gen::compute_sizes(uint64_t asize, uint32_t data_per_index) {
   i *= ELEMENTS_PER_SECTOR;
   i *= sizeof(Index);
   assert(8 == sizeof(Index));
-  index_size = ROUND_TO(i, SAFE_SECTOR_SIZE);
-  index_parts = ROUND_DIV(index_size, INDEX_BYTES_PER_PART);
+  index_size = round_to(i, static_cast<uint64_t>(SAFE_SECTOR_SIZE));
+  index_parts = round_div(index_size, static_cast<uint64_t>(INDEX_BYTES_PER_PART));
   log_size = index_size;
   log_buffer_size = hdb()->write_buffer_size < log_size ? hdb()->write_buffer_size : log_size;
   // compute offsets
@@ -788,7 +812,7 @@ void Gen::compute_sizes(uint64_t asize, uint32_t data_per_index) {
   data_offset = log_offset[1] + log_size;
   // compute data length
   data_size = s - header_offset - SAFE_SECTOR_SIZE - index_size - log_size;
-  data_size = ROUND_DOWN_SAFE_SECTOR_SIZE(data_size);
+  data_size = round_down_safe_sector_size(data_size);
   assert(data_size >= hdb()->write_buffer_size);
   // printf("index_size = %llu data_size = %llu data_offset = %llu\n", index_size, data_size, data_offset);
 }
@@ -1466,7 +1490,7 @@ int HashDB::read(uint64_t key, Callback *callback, bool immediate_miss) {
 int Slice::might_exist(uint64_t key) {
   int buckets = gen[0]->buckets;
   int b = key % buckets;
-  uint16_t tag = KEY2TAG(key);
+  uint16_t tag = key_to_tag(key);
   forv_Gen(g, gen) {
     pthread_mutex_lock(&g->mutex);
     foreach_contiguous_element(g, e, b, tmp) {
@@ -1610,7 +1634,7 @@ void Gen::write_buffer(int force_wrap) {
     for (int s = 0; s < sectors(); s++) clean_sector(s);
   } else
     header->write_position = new_write_position;
-  uint64_t done = MODULAR_DIFFERENCE(header->write_position, sync_header->write_position, data_size);
+  uint64_t done = modular_difference(header->write_position, sync_header->write_position, data_size);
   int parts_done = done / (data_size / index_parts);
   // printf("done %lld part_size %lld parts_done %d sync_part %d\n", done, data_size / index_parts, parts_done,
   // sync_part);
@@ -1749,7 +1773,7 @@ void Gen::set_element(Index *i, uint64_t key, bool phase, uint32_t size, uint32_
   i->phase = phase;
   i->size = size;
   assert(i->size);
-  i->tag = KEY2TAG(key);
+  i->tag = key_to_tag(key);
   debug_log_it(key, i, DEBUG_LOG_SET);
 }
 
@@ -1856,7 +1880,7 @@ void Gen::commit_buffer(uint8_t *start, uint8_t *end) {
 
 int Gen::find_key(uint64_t key, uint32_t phase, uint32_t size, uint32_t offset) {
   int b = ((uint32_t)key) % buckets;
-  uint16_t tag = KEY2TAG(key);
+  uint16_t tag = key_to_tag(key);
   foreach_contiguous_element(this, e, b, tmp) {
     Index *i = index(e);
     if (i->tag == tag && i->phase == phase && i->size == size && i->offset == offset) return e;
@@ -1920,7 +1944,7 @@ void Gen::delete_key(uint64_t key, uint32_t phase, uint32_t size, uint32_t offse
   debug_log_it(key, 0, DEBUG_LOG_DEL_KEY);
   int b = ((uint32_t)key) % buckets;
   int s = bucket_to_sector(b);
-  uint16_t tag = KEY2TAG(key);
+  uint16_t tag = key_to_tag(key);
   foreach_contiguous_element(*this, e, b, tmp) {
     Index *i = index(e);
     if (i->offset == offset && i->tag == tag && i->size == size && i->phase == phase) {
@@ -1950,7 +1974,7 @@ Ldeleted:
 void Gen::delete_collision(uint64_t key) {
   int b = ((uint32_t)key) % buckets;
   int s = bucket_to_sector(b);
-  uint16_t tag = KEY2TAG(key);
+  uint16_t tag = key_to_tag(key);
   foreach_contiguous_element(*this, e, b, tmp) {
     Index *i = index(e);
     if (i->tag == tag && i->size) {
