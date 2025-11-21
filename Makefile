@@ -124,7 +124,7 @@ LIBS += -lm
 
 AUX_FILES = $(MODULE)/Makefile $(MODULE)/LICENSE $(MODULE)/README
 
-LIB_SRCS = hashdb.cc prime.cc
+LIB_SRCS = hashdb.cc prime.cc slice.cc gen.cc
 LIB_OBJS = $(LIB_SRCS:%.cc=%.o)
 
 TEST_LIB_SRCS = test.cc

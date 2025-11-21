@@ -66,7 +66,7 @@ class ThreadPool {
     bool stop;
 };
 
-void Worker::operator()() {
+inline void Worker::operator()() {
   std::function<void()> task;
   while(true) {
     std::unique_lock<std::mutex> lock(pool.queue_mutex);
@@ -87,7 +87,7 @@ void Worker::operator()() {
 }
 
 // the constructor just launches some amount of workers
-ThreadPool::ThreadPool(ThreadPool::size_type threads) : stop(false) {
+inline ThreadPool::ThreadPool(ThreadPool::size_type threads) : stop(false) {
   workers.reserve(threads);
 
   for(ThreadPool::size_type i = 0; i < threads; ++i)
@@ -119,18 +119,18 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
     return res;
 }
 
-void ThreadPool::add_job(void *(*pfn)(void *), void *arg) {
+inline void ThreadPool::add_job(void *(*pfn)(void *), void *arg) {
   enqueue((std::function<void *()>)std::bind(pfn, arg));
 }
 
-pthread_t ThreadPool::thread_create(void *(*pfn)(void *), void *arg) {
+inline pthread_t ThreadPool::thread_create(void *(*pfn)(void *), void *arg) {
   pthread_t thread;
   pthread_create(&thread, NULL, pfn, arg);
   return thread;
 }
 
 // the destructor joins all threads
-ThreadPool::~ThreadPool() {
+inline ThreadPool::~ThreadPool() {
   stop = true;
 
   condition.notify_all();
