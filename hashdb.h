@@ -61,7 +61,7 @@ class HashDB {
   // The "size" is the size that will be used or allocated, and -1
   //   for file/dir or raw means use the existing or max size respectively.
   // If "init" is true, the slice will be initialized.
-  int slice(char *pathname, uint64_t size = HASHDB_SLICE_SIZE_MAX, bool init = false);
+  int slice(const char *pathname, uint64_t size = HASHDB_SLICE_SIZE_MAX, bool init = false);
 
   int reinitialize();           // Reinitialize all slices (clear data).
   int open(int read_only = 0);  // Open all slices.

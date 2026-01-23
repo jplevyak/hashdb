@@ -28,7 +28,7 @@
 
 void fail(const char *s, ...);
 
-Slice::Slice(HDB *ahdb, int aislice, char *alayout_pathname, uint64_t alayout_size) {
+Slice::Slice(HDB *ahdb, int aislice, const char *alayout_pathname, uint64_t alayout_size) {
   struct stat stat_buf;
 
   hdb = ahdb;

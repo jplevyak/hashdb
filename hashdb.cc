@@ -127,7 +127,7 @@ DO_SLICE(close);
 
 HashDB *new_HashDB() { return new HDB(); }
 
-int HashDB::slice(char *pathname, uint64_t size, bool init) {
+int HashDB::slice(const char *pathname, uint64_t size, bool init) {
   HDB *hdb = ((HDB *)this);
   pthread_mutex_lock(&hdb->mutex);
   Slice *s = new Slice(hdb, hdb->slice.size(), pathname, size);

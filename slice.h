@@ -27,6 +27,6 @@ class Slice {
   int verify();
   int close();
 
-  Slice(HDB *ahdb, int aislice, char *apathname, uint64_t alayout_size = -1);
+  Slice(HDB *hdb, int islice, const char *pathname, uint64_t layout_size = -1);
 };
 #define forv_Slice(_x, _v) forv_Vec(Slice, _x, _v)
