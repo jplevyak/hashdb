@@ -2,14 +2,18 @@
 
 #include "hashdb.h"
 #include "hashdb_internal.h"
-#include <pthread.h>
+#include <mutex>
+#include <condition_variable>
+#include <thread>
+#include <barrier>
+#include <vector>
 
 class HDB : public HashDB {
  public:
-  Vec<Slice *> slice;
-  pthread_mutex_t mutex;
-  pthread_t sync_thread;
-  pthread_cond_t sync_condition;
+  std::vector<Slice *> slice;
+  std::mutex mutex;
+  std::thread sync_thread;
+  std::condition_variable sync_condition;
   int exiting;
   int read_only;
 

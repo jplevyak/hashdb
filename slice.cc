@@ -23,7 +23,7 @@
 #include <sys/ioctl.h>
 #include <linux/fs.h>
 #include <linux/hdreg.h>
-//#include "hdparm.h"
+// #include "hdparm.h"
 #endif
 
 void fail(const char *s, ...);
@@ -70,6 +70,9 @@ Slice::Slice(HDB *ahdb, int aislice, const char *alayout_pathname, uint64_t alay
 #endif
   }
   ::close(fd);
+#ifndef O_DIRECT
+#define O_DIRECT 0
+#endif
   if ((fd = ::open(pathname, O_CREAT | O_RDWR | O_DIRECT, S_IRUSR | S_IWUSR)) < 0)
     fail("unable to open '%s'", pathname);
   if (::fstat(fd, &stat_buf)) fail("unable to stat '%s'", pathname);
@@ -105,21 +108,27 @@ Slice::Slice(HDB *ahdb, int aislice, const char *alayout_pathname, uint64_t alay
 
 int Slice::init() {
   int res = 0;
-  forv_Gen(g, gen) if (!res) res = g->init();
-  else g->init();
+  for (auto g : gen)
+    if (!res)
+      res = g->init();
+    else
+      g->init();
   return res;
 }
 
 int Slice::open() {
   int res = 0;
-  forv_Gen(g, gen) if (!res) res = g->open();
-  else g->open();
+  for (auto g : gen)
+    if (!res)
+      res = g->open();
+    else
+      g->open();
   return res;
 }
 
-int Slice::read(uint64_t key, Vec<HashDB::Extent> &hit) {
+int Slice::read(uint64_t key, std::vector<HashDB::Extent> &hit) {
   int r = 0;
-  forv_Gen(g, gen) r = g->read(key, hit) | r;
+  for (auto g : gen) r = g->read(key, hit) | r;
   return r;
 }
 
@@ -127,8 +136,8 @@ int Slice::might_exist(uint64_t key) {
   int buckets = gen[0]->buckets;
   int b = key % buckets;
   uint16_t tag = KEY2TAG(key);
-  forv_Gen(g, gen) {
-    pthread_mutex_lock(&g->mutex);
+  for (auto g : gen) {
+    g->mutex.lock();
     foreach_contiguous_element(g, e, b, tmp) {
       Index *i = g->index(e);
       if (i->tag == tag && i->size) return 1;
@@ -137,14 +146,14 @@ int Slice::might_exist(uint64_t key) {
       Index *i = g->index(e);
       if (i->tag == tag && i->size) return 1;
     }
-    pthread_mutex_unlock(&g->mutex);
+    g->mutex.unlock();
   }
   return 0;
 }
 
 int Slice::write(uint64_t *key, int nkeys, HashDB::Marshal *marshal, HashDB::Callback *callback) {
   Gen *g = gen[0];
-  pthread_mutex_lock(&g->mutex);
+  g->mutex.lock();
   int res = g->write(key, nkeys, marshal);
   if (!res) {
     if (callback == HASHDB_SYNC || callback == HASHDB_FLUSH) {
@@ -153,7 +162,9 @@ int Slice::write(uint64_t *key, int nkeys, HashDB::Marshal *marshal, HashDB::Cal
         g->write_buffer();
         // wait_for_write_to_complete(b); // TODO: need to make this visible or reimplement?
         // Wait for write to complete logic
-        while (b->writing) pthread_cond_wait(&b->gen->write_condition, &b->gen->mutex);
+        std::unique_lock<std::mutex> lock(b->gen->mutex, std::adopt_lock);
+        while (b->writing) b->gen->write_condition.wait(lock);
+        lock.release();
       } else {
         // wait_for_flush(b, hdb->sync_wait_msec);
         // Wait for flush logic
@@ -162,33 +173,42 @@ int Slice::write(uint64_t *key, int nkeys, HashDB::Marshal *marshal, HashDB::Cal
         // Gen *g = b->gen; // Already have g
         auto startt = std::chrono::high_resolution_clock::now();
         auto donet = startt + std::chrono::milliseconds(wait_msec);
+        // Note: we need to handle the lock carefully here for timedwait
         while (std::chrono::high_resolution_clock::now() < donet && b->next_offset == o && b->start != b->cur) {
-            struct timespec ts;
-            ts.tv_sec = wait_msec / 1000;
-            ts.tv_nsec = (wait_msec % 1000) * 1000000;
-            pthread_cond_timedwait(&g->write_condition, &g->mutex, &ts);
+          // pthread_cond_timedwait expects mutex locked.
+          // b->gen->mutex is g->mutex which IS locked.
+          std::unique_lock<std::mutex> lock(g->mutex, std::adopt_lock);
+          auto now = std::chrono::high_resolution_clock::now();
+          auto remaining = donet - now;
+          if (remaining.count() > 0) g->write_condition.wait_for(lock, remaining);
+          lock.release();  // release ownership
         }
         if (b->next_offset == o && b->start != b->cur) {
-            if (!b->writing) g->write_buffer();
-            while (b->writing) pthread_cond_wait(&b->gen->write_condition, &b->gen->mutex);
+          if (!b->writing) g->write_buffer();
+          std::unique_lock<std::mutex> lock(b->gen->mutex, std::adopt_lock);
+          while (b->writing) b->gen->write_condition.wait(lock);
+          lock.release();
         }
       }
     } else if (callback != HASHDB_ASYNC) {
     }
   }
-  pthread_mutex_unlock(&g->mutex);
+  g->mutex.unlock();
   return res;
 }
 
 int Slice::verify() {
   int res = 0;
-  forv_Gen(g, gen) if (!res) res = g->verify();
-  else g->verify();
+  for (auto g : gen)
+    if (!res)
+      res = g->verify();
+    else
+      g->verify();
   return res;
 }
 
 int Slice::close() {
-  forv_Gen(g, gen) {
+  for (auto g : gen) {
     g->close();
     DELETE(g);
   }

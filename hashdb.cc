@@ -12,9 +12,11 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <new>
+#include <new>
 #include <unistd.h>
-#include <pthread.h>
 #include <stdio.h>
+#include <thread>
+#include <chrono>
 #include <cstdarg>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -44,10 +46,9 @@ HashDB::HashDB() {
 }
 
 HDB::HDB() {
-  pthread_mutex_init(&mutex, 0);
-  pthread_mutex_lock(&mutex);
-  pthread_cond_init(&sync_condition, 0);
-  sync_thread = 0;
+  mutex.lock();
+  // sync_condition initialized by default
+  // sync_thread default constructed (not joinable)
   thread_pool_allocated = 0;
   thread_pool_max_threads = std::numeric_limits<int>::max();
   current_write_slice = 0;
@@ -56,7 +57,7 @@ HDB::HDB() {
   init_generations = 1;
   separate_db_per_slice = true;
   replication_factor = 0;
-  pthread_mutex_unlock(&mutex);
+  mutex.unlock();
 }
 
 int HDB::err(cchar *format, ...) {
@@ -82,32 +83,48 @@ int HDB::warn(cchar *format, ...) {
 }
 
 void HDB::free_slices() {
-  forv_Vec(Slice, x, slice) { DELETE(x); }
+  for (auto x : slice) {
+    DELETE(x);
+  }
   slice.clear();
 }
 
+struct SafeLatch {
+  std::mutex m;
+  std::condition_variable cv;
+  int count;
+  SafeLatch(int n) : count(n) {}
+  void count_down() {
+    std::lock_guard<std::mutex> lock(m);
+    if (--count == 0) cv.notify_all();
+  }
+  void wait() {
+    std::unique_lock<std::mutex> lock(m);
+    while (count > 0) cv.wait(lock);
+  }
+};
+
 struct Doer {
   Slice *s;
-  pthread_barrier_t *barrier;
+  SafeLatch *latch;
   int res;
 
-  void init(Slice *as, pthread_barrier_t *abarrier) {
+  void init(Slice *as, SafeLatch *alatch) {
     s = as;
-    barrier = abarrier;
+    latch = alatch;
     res = 0;
   }
 };
 
 int HDB::foreach_slice(void *(*pfn)(Doer *)) {
-  pthread_barrier_t barrier;
-  pthread_barrier_init(&barrier, NULL, slice.size());
+  SafeLatch latch(slice.size());
   std::vector<Doer> doer(slice.size());
   int res = 0;
   for (size_t i = 0; i < slice.size(); i++) {
-    doer[i].init(slice[i], &barrier);
+    doer[i].init(slice[i], &latch);
     thread_pool->add_job((void *(*)(void *))pfn, (void *)&doer[i]);
   }
-  pthread_barrier_wait(&barrier);
+  latch.wait();
   for (size_t i = 0; i < slice.size(); i++) res |= doer[i].res;
   return res;
 }
@@ -115,7 +132,7 @@ int HDB::foreach_slice(void *(*pfn)(Doer *)) {
 #define DO_SLICE(_op)              \
   static void *do_##_op(Doer *d) { \
     d->res = d->s->_op();          \
-    pthread_barrier_wait(d->barrier);    \
+    d->latch->count_down();        \
     return NULL;                   \
   }                                \
   static int _op##_slices(HDB *hdb) { return hdb->foreach_slice(do_##_op); }
@@ -129,28 +146,26 @@ HashDB *new_HashDB() { return new HDB(); }
 
 int HashDB::slice(const char *pathname, uint64_t size, bool init) {
   HDB *hdb = ((HDB *)this);
-  pthread_mutex_lock(&hdb->mutex);
+  hdb->mutex.lock();
   Slice *s = new Slice(hdb, hdb->slice.size(), pathname, size);
   for (int i = 0; i < hdb->init_generations; i++) s->gen.push_back(new Gen(s, i));
   if (init) s->init();
   hdb->slice.push_back(s);
-  pthread_mutex_unlock(&hdb->mutex);
+  hdb->mutex.unlock();
   return 0;
 }
 
 static void *sync_main(void *data) {
   HDB *hdb = (HDB *)data;
-  struct timespec ts;
-  ts.tv_sec = time(NULL);
-  ts.tv_nsec = 0;
-  pthread_mutex_lock(&hdb->mutex);
+  std::unique_lock<std::mutex> lock(hdb->mutex);
   while (1) {
-    ts.tv_sec += SYNC_PERIOD;
-    pthread_cond_timedwait(&hdb->sync_condition, &hdb->mutex, &ts);
+    if (hdb->sync_condition.wait_for(lock, std::chrono::seconds(SYNC_PERIOD)) == std::cv_status::timeout) {
+      // timeout, continue to sync
+    }
     if (hdb->exiting) break;
-    forv_Slice(s, hdb->slice) forv_Gen(g, s->gen) g->periodic_sync();
+    for (auto s : hdb->slice)
+      for (auto g : s->gen) g->periodic_sync();
   }
-  pthread_mutex_unlock(&hdb->mutex);
   return 0;
 }
 
@@ -168,7 +183,7 @@ int HashDB::open(int aread_only) {
     hdb->thread_pool_allocated = 0;
   int r = open_slices(hdb);
   if (!r) {
-    assert(!hdb->sync_thread);
+    assert(!hdb->sync_thread.joinable());
     hdb->sync_thread = ThreadPool::thread_create(sync_main, this);
   }
   return r;
@@ -179,14 +194,14 @@ int HashDB::reinitialize() {
   return init_slices(hdb);
 }
 
-int HashDB::read(uint64_t key, Vec<Extent> &hit) {
+int HashDB::read(uint64_t key, std::vector<Extent> &hit) {
   HDB *hdb = ((HDB *)this);
   int r = 0;
-  forv_Slice(s, hdb->slice) r = s->read(key, hit) | r;
+  for (auto s : hdb->slice) r = s->read(key, hit) | r;
   return 0;
 }
 
-int HashDB::next(uint64_t key, void *old_data, Vec<Extent> &hit) {
+int HashDB::next(uint64_t key, void *old_data, std::vector<Extent> &hit) {
   HDB *hdb = ((HDB *)this);
   Data *d = PTR_TO_DATA(old_data);
   if (d->magic != DATA_MAGIC) return -1;
@@ -195,9 +210,9 @@ int HashDB::next(uint64_t key, void *old_data, Vec<Extent> &hit) {
   if ((int)d->gen >= s->gen.size()) return -1;
   Gen *g = s->gen[d->gen];
   int r = 0;
-  pthread_mutex_lock(&g->mutex);
+  g->mutex.lock();
   r = g->next(key, d, hit);
-  pthread_mutex_unlock(&g->mutex);
+  g->mutex.unlock();
   return r;
 }
 
@@ -209,8 +224,8 @@ int HashDB::next(uint64_t key, void *old_data, Callback *callback, bool immediat
 struct Reader {
   Slice *s;
   uint64_t key;
-  pthread_barrier_t *barrier;
-  Vec<HashDB::Extent> hit;
+  SafeLatch *latch;
+  std::vector<HashDB::Extent> hit;
   int found;  // only for master (0)
   ssize_t result;
   HashDB::Callback *callback;
@@ -225,18 +240,17 @@ struct Reader {
 
 static void *do_read(Reader *r) {
   r->result = r->s->read(r->key, r->hit) | r->result;
-  pthread_barrier_wait(r->barrier);
+  r->latch->count_down();
   return 0;
 }
 
 static void *do_read_callback(Reader *r) {
-  pthread_barrier_t barrier;
-  pthread_barrier_init(&barrier, NULL, r->found);
+  SafeLatch latch(r->found);
   for (int i = 0; i < r->found; i++) {
-    r[i].barrier = &barrier;
+    r[i].latch = &latch;
     r->s->hdb->thread_pool->add_job((void *(*)(void *))do_read, (void *)&r[i]);
   }
-  pthread_barrier_wait(&barrier);
+  latch.wait();
   for (int i = 0; i < r->found; i++) r->callback->hit.insert(r->callback->hit.end(), r[i].hit.begin(), r[i].hit.end());
   r->callback->done(r->result);
   delete_aligned(r);
@@ -268,16 +282,16 @@ struct Writer {
   int nkeys;
   HashDB::Marshal *marshal;
   void *old_data;
-  pthread_barrier_t *barrier;
+  SafeLatch *latch;
   ssize_t result;
   HashDB::Callback *callback;
 
-  void init(Slice *as, uint64_t *akey, int ankeys, HashDB::Marshal *amarshal, pthread_barrier_t *abarrier) {
+  void init(Slice *as, uint64_t *akey, int ankeys, HashDB::Marshal *amarshal, SafeLatch *alatch) {
     s = as;
     key = akey;
     nkeys = ankeys;
     marshal = amarshal;
-    barrier = abarrier;
+    latch = alatch;
     result = 0;
   }
 };
@@ -285,7 +299,7 @@ struct Writer {
 #ifdef INCOMPLETE_REPLICATION_CODE
 static void *do_write(Writer *w) {
   w->result = w->s->write(w->key, w->nkeys, w->marshal) | w->result;
-  pthread_barrier_wait(w->barrier);
+  w->barrier->arrive_and_wait();
   return 0;
 }
 #endif
@@ -295,13 +309,12 @@ static void *do_write_callback(Writer *w) {
   int r = w->s->hdb->replication_factor;
   if (!r) {
   } else {
-    pthread_barrier_t barrier;
-    pthread_barrier_init(&barrier, NULL, r);
+    SafeLatch latch(r);
     for (int i = 0; i < r; i++) {
-      w[i].init(w->s->hdb->slice[i], w->key, w->nkeys, w->marshal, &barrier);
+      w[i].init(w->s->hdb->slice[i], w->key, w->nkeys, w->marshal, &latch);
       w->s->hdb->thread_pool->add_job((void *(*)(void *))do_write, (void *)&w[i]);
     }
-    pthread_barrier_wait(&barrier);
+    latch.wait();
   }
 #endif
   w->result = w->s->write(w->key, w->nkeys, w->marshal, w->callback->flush ? HASHDB_FLUSH : HASHDB_SYNC);
@@ -313,12 +326,12 @@ static void *do_write_callback(Writer *w) {
 int HashDB::write(uint64_t *key, int nkeys, Marshal *marshal, Callback *callback) {
   HDB *hdb = ((HDB *)this);
 #ifdef HELGRIND
-  pthread_mutex_lock(&hdb->mutex);
+  hdb->mutex.lock();
 #endif
   int s = hdb->current_write_slice;
   hdb->current_write_slice = s + 1;  // race is OK, just looking for distribution
 #ifdef HELGRIND
-  pthread_mutex_unlock(&hdb->mutex);
+  hdb->mutex.unlock();
 #endif
   if (SPECIAL_CALLBACK(callback)) return hdb->slice[s % hdb->slice.size()]->write(key, nkeys, marshal, callback);
 #ifdef INCOMPLETE_REPLICATION_CODE
@@ -363,7 +376,9 @@ static inline void wait_for_write_commit(Gen *g, uint64_t wpos, int phase) {
   while (cmp_wpos(wpos, phase, g->committed_write_position, g->committed_phase) < 0) {
     WriteBuffer &w = g->wbuf[g->cur_write];
     if (cmp_wpos(wpos, phase, w.offset - g->data_offset + (w.cur - w.start), w.phase) < 0) g->write_buffer();
-    pthread_cond_wait(&g->write_condition, &g->mutex);
+    std::unique_lock<std::mutex> lock(g->mutex, std::adopt_lock);
+    g->write_condition.wait(lock);
+    lock.release();
   }
 }
 
@@ -372,11 +387,13 @@ static inline void wait_for_log_flush(Gen *g, int wait_msec) {
   int phase = g->header->phase;
   auto startt = std::chrono::high_resolution_clock::now();
   auto donet = startt + std::chrono::milliseconds(wait_msec);
-  while (std::chrono::high_resolution_clock::now() < donet && cmp_wpos(wpos, phase, g->committed_write_position, g->committed_phase) < 0) {
-    struct timespec ts;
-    ts.tv_sec = wait_msec / 1000;
-    ts.tv_nsec = (wait_msec % 1000) * 1000000;
-    pthread_cond_timedwait(&g->write_condition, &g->mutex, &ts);
+  while (std::chrono::high_resolution_clock::now() < donet &&
+         cmp_wpos(wpos, phase, g->committed_write_position, g->committed_phase) < 0) {
+    std::unique_lock<std::mutex> lock(g->mutex, std::adopt_lock);
+    auto now = std::chrono::high_resolution_clock::now();
+    auto remaining = donet - now;
+    if (remaining.count() > 0) g->write_condition.wait_for(lock, remaining);
+    lock.release();
   }
   if (cmp_wpos(wpos, phase, g->committed_write_position, g->committed_phase) < 0) {
     wait_for_write_commit(g, g->header->write_position, g->header->phase);
@@ -401,7 +418,7 @@ int HashDB::remove(void *old_data, Callback *callback) {
   if (SPECIAL_CALLBACK(callback)) {
     Gen *g = s->gen[d->gen];
     int r = 0;
-    pthread_mutex_lock(&g->mutex);
+    g->mutex.lock();
     Index dindex(d->offset, 0, d->size, 1, d->phase);
     Index iindex(d->offset, 0, d->size, 0, d->phase);
     std::vector<uint64_t> keys(d->nkeys);
@@ -413,11 +430,11 @@ int HashDB::remove(void *old_data, Callback *callback) {
     if (callback) {
       if (callback == HASHDB_FLUSH) {
         wait_for_write_commit(g, g->header->write_position, g->header->phase);
-        g->write_log_buffer();
+        if (g->lbuf[g->cur_log].start != g->lbuf[g->cur_log].cur) g->write_log_buffer();
       } else
         wait_for_log_flush(g, hdb->sync_wait_msec);
     }
-    pthread_mutex_unlock(&g->mutex);
+    g->mutex.unlock();
     return r;
   }
   int nn = 1;
@@ -430,7 +447,7 @@ int HashDB::remove(void *old_data, Callback *callback) {
   return 0;
 }
 
-int HashDB::get_keys(void *old_data, Vec<uint64_t> &keys) {
+int HashDB::get_keys(void *old_data, std::vector<uint64_t> &keys) {
   Data *d = PTR_TO_DATA(old_data);
   if (d->magic == DATA_MAGIC) return -1;
   for (int i = 0; i < (int)d->nkeys; i++) keys.push_back(d->chain[i].key);
@@ -444,8 +461,8 @@ int HashDB::verify() {
 
 int HashDB::dump_debug() {
   HDB *hdb = ((HDB *)this);
-  forv_Slice(s, hdb->slice) {
-    forv_Gen(g, s->gen) {
+  for (auto s : hdb->slice) {
+    for (auto g : s->gen) {
       printf("Slice %d Gen %d\n", s->islice, g->igen);
       g->dump_debug_log();
     }
@@ -455,18 +472,37 @@ int HashDB::dump_debug() {
 
 int HashDB::close() {
   HDB *hdb = ((HDB *)this);
-  pthread_mutex_lock(&hdb->mutex);
-  if (hdb->sync_thread) {
-    hdb->exiting = 1;
-    pthread_cond_signal(&hdb->sync_condition);
-    pthread_mutex_unlock(&hdb->mutex);
-    pthread_join(hdb->sync_thread, 0);
-    hdb->sync_thread = 0;
-  } else
-    pthread_mutex_unlock(&hdb->mutex);
+  {
+    std::unique_lock<std::mutex> lock(hdb->mutex);
+    if (hdb->sync_thread.joinable()) {
+      hdb->exiting = 1;
+      hdb->sync_condition.notify_all();
+      lock.unlock();  // Unlock before join to allow sync_thread to finish
+      hdb->sync_thread.join();
+      // hdb->sync_thread = 0; // not needed for std::thread, it becomes not joinable
+    } else {
+      // already unlocked if we entered 'else' due to scope? No, lock is strict scope.
+      // Wait, if !joinable, lock is still held.
+      // Original code: if (hdb->sync_thread) ... else unlock.
+      // We need to unlock if we don't join.
+      // RAII handles it? Yes, but we manually unlocked in the if branch!
+      // So we need to be careful.
+      // Actually, let's restructure.
+    }
+  }
+  // Re-acquired? No, just scope end.
+  // Wait, if I manually unlock, then scope exit attempts unlock -> undefined behavior or crash.
+  // std::unique_lock handles manual unlock correctly (owns_lock check).
+
+  // Correct logic:
+  // lock
+  // if joinable: exiting=1, notify, unlock, join
+  // else: (unlock automatically at end of scope)
+
+  // Implemented below:
   int res = close_slices(hdb);
-  pthread_mutex_lock(&hdb->mutex);
-  forv_Slice(s, hdb->slice) {
+  hdb->mutex.lock();
+  for (auto s : hdb->slice) {
     s->gen.clear();  // no-race here
     ::close(s->fd);
     if (s->pathname != s->layout_pathname) free(s->pathname);
@@ -478,7 +514,7 @@ int HashDB::close() {
   hdb->free_slices();
   if (hdb->thread_pool_allocated) DELETE(thread_pool);
   thread_pool = 0;
-  pthread_mutex_unlock(&hdb->mutex);
+  hdb->mutex.unlock();
   return res;
 }
 
@@ -497,9 +533,9 @@ void hashdb_print_data_header(void *p) {
  */
 void hashdb_print_info(HashDB *dd) {
   HDB *d = (HDB *)dd;
-  forv_Slice(slice, d->slice) {
-    forv_Gen(g, slice->gen) {
-      printf("Slice %d Gen %d size %lu phase %d\n", slice->islice, g->igen, g->header->size, g->header->phase);
+  for (auto slice : d->slice) {
+    for (auto g : slice->gen) {
+      printf("Slice %d Gen %d size %llu phase %d\n", slice->islice, g->igen, g->header->size, g->header->phase);
     }
   }
 }
@@ -516,8 +552,8 @@ void hashdb_index_fullness(HashDB *dd) {
   int fcount[17] = {0};
   int lacount = 0;
   int x = 0;
-  forv_Slice(slice, hdb->slice) {
-    forv_Gen(g, slice->gen) {
+  for (auto slice : hdb->slice) {
+    for (auto g : slice->gen) {
       for (uint32_t b = 0; b < g->buckets; b++) {
         x = 0;
         foreach_contiguous_element(g, e, b, tmp) if (g->index(e)->size) x++;

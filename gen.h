@@ -2,22 +2,24 @@
 
 #include "hashdb_internal.h"
 #include "slice.h"
-#include <pthread.h>
+
+#include <mutex>
+#include <condition_variable>
 
 class WriteBuffer {
  public:
-  Gen *gen;
-  uint8_t *start;
-  uint8_t *cur;
-  uint8_t *end;
-  uint8_t *last;
-  int writing;
-  uint32_t phase, committed_phase, next_phase;
-  uint64_t offset, next_offset;
-  uint64_t pad_position;
-  uint64_t committed_write_position;
-  uint64_t committed_write_serial;
-  ssize_t result;
+  Gen *gen{};
+  uint8_t *start{nullptr};
+  uint8_t *cur{nullptr};
+  uint8_t *end{nullptr};
+  uint8_t *last{nullptr};
+  int writing{0};
+  uint32_t phase{0}, committed_phase{0}, next_phase{0};
+  uint64_t offset{0}, next_offset{0};
+  uint64_t pad_position{0};
+  uint64_t committed_write_position{0};
+  uint64_t committed_write_serial{0};
+  ssize_t result{0};
 
   void init(Gen *g, int i);
 };
@@ -26,42 +28,43 @@ class Gen {
  public:
   Slice *slice;
   int igen;
-  Header *header;
-  Header *sync_header;
-  uint64_t size;
-  uint32_t buckets;
-  uint64_t header_offset;
-  uint64_t index_offset;
-  uint64_t index_size;
+  Header *header{nullptr};
+  Header *sync_header{nullptr};
+  uint64_t size{0};
+  uint32_t buckets{0};
+  uint64_t header_offset{0};
+  uint64_t index_offset{0};
+  uint64_t index_size{0};
   uint64_t log_offset[2];
-  uint64_t log_size;
-  uint64_t log_buffer_size;
-  uint64_t data_offset;
-  uint64_t data_size;
-  int index_parts;
+  uint64_t log_size{0};
+  uint64_t log_buffer_size{0};
+  uint64_t data_offset{0};
+  uint64_t data_size{0};
+  int index_parts{0};
 
-  void *raw_index;
+  void *raw_index{nullptr};
   Index *index(int e) { return &((Index *)raw_index)[e]; }
-  uint8_t *index_dirty_marks;
-  uint8_t *sync_buffer;
-  int syncing;
+  uint8_t *index_dirty_marks{nullptr};
+  uint8_t *sync_buffer{nullptr};
+  int syncing{0};
   void dirty_sector(int s) { index_dirty_marks[s / (INDEX_BYTES_PER_PART / SECTOR_SIZE)] = 1; }
   int is_marked_part(int p) { return index_dirty_marks[p]; }
   void unmark_part(int p) { index_dirty_marks[p] = 0; }
 
   WriteBuffer lbuf[LOG_BUFFERS];
   WriteBuffer wbuf[WRITE_BUFFERS];
-  uint32_t cur_log;
-  uint32_t cur_write;
-  uint64_t log_position;
+  uint32_t cur_log{0};
+  uint32_t cur_write{0};
+  uint64_t log_position{0};
   LookasideCache lookaside;
-  pthread_cond_t write_condition;
-  pthread_mutex_t mutex;
-  int sync_part;
-  uint64_t committed_write_position;
-  uint64_t committed_write_serial;
-  uint32_t committed_phase;
-  char *debug_log, *debug_log_ptr;
+
+  std::condition_variable write_condition;
+  std::mutex mutex;
+  int sync_part{0};
+  uint64_t committed_write_position{0};
+  uint64_t committed_write_serial{0};
+  uint32_t committed_phase{0};
+  char *debug_log{nullptr}, *debug_log_ptr{nullptr};
 
   HDB *hdb();
   int sectors() { return (buckets + (BUCKETS_PER_SECTOR - 1)) / BUCKETS_PER_SECTOR; }
@@ -101,11 +104,11 @@ class Gen {
   void free();
   void periodic_sync();
 
-  int read(uint64_t key, Vec<HashDB::Extent> &hit);
-  int next(uint64_t key, Data *d, Vec<HashDB::Extent> &hit);
+  int read(uint64_t key, std::vector<HashDB::Extent> &hit);
+  int next(uint64_t key, Data *d, std::vector<HashDB::Extent> &hit);
   int write(uint64_t *key, int nkeys, HashDB::Marshal *marshal);
   int write_remove(uint64_t *key, int nkeys, Index *i);
-  int read_element(Index *i, uint64_t key, Vec<HashDB::Extent> &hit);
+  int read_element(Index *i, uint64_t key, std::vector<HashDB::Extent> &hit);
   Data *read_data(Index *i);
   WriteBuffer *get_buffer(int nkeys, uint64_t data_len);
 
@@ -113,7 +116,7 @@ class Gen {
   void insert_key(uint64_t key, uint32_t phase, uint32_t size, uint32_t offset);
   void delete_key(uint64_t key, uint32_t phase, uint32_t size, uint32_t offset);
   void set_element(Index *i, uint64_t key, bool phase, uint32_t size, uint32_t offset);
-  void find_indexes(uint64_t key, Vec<Index> &indexes);
+  void find_indexes(uint64_t key, std::vector<Index> &indexes);
   void delete_collision(uint64_t key);
   int delete_bucket_element(int e, int b);
   int delete_overflow_element(int e, int p, int b);
@@ -134,4 +137,3 @@ class Gen {
 
   Gen(Slice *aslice, int aigen = 0);
 };
-#define forv_Gen(_x, _v) forv_Vec(Gen, _x, _v)

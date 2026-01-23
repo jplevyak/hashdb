@@ -97,10 +97,7 @@ endif
 BUILD_VERSION = $(shell git show-ref 2> /dev/null | head -1 | cut -d ' ' -f 1)
 VERSIONCFLAGS += -DMAJOR_VERSION=$(MAJOR) -DMINOR_VERSION=$(MINOR) -DBUILD_VERSION=\"$(BUILD_VERSION)\"
 
-GCC_GTEQ_6 := $(shell expr `gcc -dumpversion | sed -e 's/\.\([0-9][0-9]\)/\1/g' -e 's/\.\([0-9]\)/0\1/g' -e 's/^[0-9]\{3,4\}$$/&00/'` \>= 60000)
-ifneq ($(GCC_GTEQ_6),1)
-CFLAGS += -std=gnu++11
-endif
+CFLAGS += -std=c++20
 
 CFLAGS += -Wall -Wno-strict-aliasing
 # debug flags

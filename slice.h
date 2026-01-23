@@ -17,16 +17,15 @@ class Slice {
   uint32_t is_file : 1;
   uint32_t is_dir : 1;
 
-  Vec<Gen *> gen;
+  std::vector<Gen *> gen;
 
   int init();
   int open();
   int might_exist(uint64_t key);
-  int read(uint64_t key, Vec<HashDB::Extent> &hit);
+  int read(uint64_t key, std::vector<HashDB::Extent> &hit);
   int write(uint64_t *key, int nkeys, HashDB::Marshal *marshal, HashDB::Callback *callback);
   int verify();
   int close();
 
   Slice(HDB *hdb, int islice, const char *pathname, uint64_t layout_size = -1);
 };
-#define forv_Slice(_x, _v) forv_Vec(Slice, _x, _v)

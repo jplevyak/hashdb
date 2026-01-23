@@ -25,17 +25,17 @@
 
 inline HDB *Gen::hdb() { return slice->hdb; }
 
-void WriteBuffer::init(Gen *g, int i) {
-  gen = g;
-  start = cur = end = 0;
-  writing = 0;
-}
+void WriteBuffer::init(Gen *g, int i) { gen = g; }
 
 void Gen::init_debug_log() {
   char debug_log_filename[256];
   strcpy(debug_log_filename, DEBUG_LOG_FILENAME);
-  sprintf(debug_log_filename + strlen(debug_log_filename), "%d.%d", slice->islice, igen);
+  snprintf(debug_log_filename + strlen(debug_log_filename), sizeof(debug_log_filename) - strlen(debug_log_filename),
+           "%d.%d", slice->islice, igen);
   ::truncate(debug_log_filename, DEBUG_LOG_SIZE);
+#ifndef O_NOATIME
+#define O_NOATIME 0
+#endif
   int debug_log_fd = ::open(debug_log_filename, O_RDWR | O_CREAT | O_NOATIME, 00660);
   assert(debug_log_fd > 0);
   debug_log_ptr = debug_log =
@@ -44,35 +44,18 @@ void Gen::init_debug_log() {
 }
 
 Gen::Gen(Slice *aslice, int aigen) {
-  pthread_mutex_init(&mutex, 0);
-  pthread_mutex_lock(&mutex);
+  mutex.lock();
   // memset((void*)this, 0, sizeof(*this)); // Unsafe for non-POD types
   slice = aslice;
   igen = aigen;
-  header = nullptr;
-  sync_header = nullptr;
-  raw_index = nullptr;
-  index_dirty_marks = nullptr;
-  sync_buffer = nullptr;
-  committed_write_position = 0;
-  committed_write_serial = 0;
-  committed_phase = 0;
-  cur_log = 0;
-  cur_write = 0;
-  log_position = 0;
-  sync_part = 0;
-  debug_log = nullptr;
-  debug_log_ptr = nullptr;
 
   for (int i = 0; i < LOG_BUFFERS; i++) lbuf[i].init(this, i);
   for (int i = 0; i < WRITE_BUFFERS; i++) wbuf[i].init(this, i);
   lookaside.clear();
-  pthread_cond_init(&write_condition, 0);
-  syncing = 0;
 #ifdef DEBUG_LOG
   init_debug_log();
 #endif
-  pthread_mutex_unlock(&mutex);
+  mutex.unlock();
 }
 
 inline ssize_t Gen::pwrite(int fd, const void *buf, size_t count, off_t offset) {
@@ -119,7 +102,7 @@ void Gen::dump_debug_log() {
   while (p - debug_log + sizeof(DebugLogEntry) < DEBUG_LOG_SIZE) {
     DebugLogEntry *e = (DebugLogEntry *)p;
     if (!e->get_tag()) break;
-    printf("%s %lu %p\n", DEBUG_LOG_TYPE_NAME[e->get_tag()], e->key, e->get_i());
+    printf("%s %llu %p\n", DEBUG_LOG_TYPE_NAME[e->get_tag()], (unsigned long long)e->key, e->get_i());
     p += sizeof(DebugLogEntry);
   }
 }
@@ -272,11 +255,11 @@ void Gen::init_index() {
 }
 
 int Gen::init() {
-  pthread_mutex_lock(&mutex);
+  mutex.lock();
   init_header();
   init_index();
   int r = save();
-  pthread_mutex_unlock(&mutex);
+  mutex.unlock();
   return r;
 }
 
@@ -411,11 +394,11 @@ int Gen::load_index() {
 }
 
 int Gen::open() {
-  pthread_mutex_lock(&mutex);
+  mutex.lock();
   compute_sizes();
-  if (load_header() < 0) goto Lerror;
-  if (header->magic != HDB_MAGIC || header->major_version != HDB_MAJOR_VERSION) {
-    if (slice->hdb->reinit_on_open_error)
+  int lh = load_header();
+  if (lh < 0 || header->magic != HDB_MAGIC || header->major_version != HDB_MAJOR_VERSION) {
+    if (slice->hdb->reinit_on_open_error || header->magic == 0 || lh < 0)
       init();
     else
       goto Lerror;
@@ -433,8 +416,9 @@ int Gen::open() {
   log_position = 0;
   for (int i = 0; i < WRITE_BUFFERS; i++) {
     wbuf[i].offset = std::numeric_limits<unsigned long long>::max();  // short circuit test in Gen::read_data
-    wbuf[i].start = wbuf[i].cur = (uint8_t *)new_aligned(hdb()->write_buffer_size);
-    wbuf[i].end = wbuf[i].start + hdb()->write_buffer_size;
+    size_t sz = hdb()->write_buffer_size;
+    wbuf[i].start = wbuf[i].cur = (uint8_t *)new_aligned(sz);
+    wbuf[i].end = wbuf[i].start + sz;
     wbuf[i].next_offset = std::numeric_limits<unsigned long long>::max();
     wbuf[i].next_phase = 0;
   }
@@ -446,15 +430,17 @@ int Gen::open() {
   committed_phase = header->phase;
   for (int s = 0; s < sectors(); s++) clean_sector(s);
   snap_header();
-  pthread_mutex_unlock(&mutex);
+  mutex.unlock();
   return 0;
 Lerror:
-  pthread_mutex_unlock(&mutex);
+  mutex.unlock();
   return -1;
 }
 
 static inline void wait_for_write_to_complete(WriteBuffer *b) {
-  while (b->writing) pthread_cond_wait(&b->gen->write_condition, &b->gen->mutex);
+  std::unique_lock<std::mutex> lk(b->gen->mutex, std::adopt_lock);
+  while (b->writing) b->gen->write_condition.wait(lk);
+  lk.release();  // release ownership so mutex remains locked for caller
 }
 
 static inline int cmp_wpos(uint64_t wpos1, int phase1, uint64_t wpos2, int phase2) {
@@ -466,7 +452,9 @@ static inline void wait_for_write_commit(Gen *g, uint64_t wpos, int phase) {
   while (cmp_wpos(wpos, phase, g->committed_write_position, g->committed_phase) < 0) {
     WriteBuffer &w = g->wbuf[g->cur_write];
     if (cmp_wpos(wpos, phase, w.offset - g->data_offset + (w.cur - w.start), w.phase) < 0) g->write_buffer();
-    pthread_cond_wait(&g->write_condition, &g->mutex);
+    std::unique_lock<std::mutex> lock(g->mutex, std::adopt_lock);
+    g->write_condition.wait(lock);
+    lock.release();
   }
 }
 
@@ -481,7 +469,7 @@ Lagain:
   }
   if (l > hdb()->write_buffer_size) return 0;
   int force_wrap = b->offset + (b->cur - b->start) + l > data_offset + data_size;
-  if (b->cur + l >= b->end || force_wrap) {
+  if (b->cur + l + FOOTER_SIZE > b->end || force_wrap) {
     write_buffer(force_wrap);
     goto Lagain;
   }
@@ -495,16 +483,19 @@ void Gen::write_index_part(int p) {
   int l = INDEX_BYTES_PER_PART;
   if (p >= index_parts - 1) l = index_size - o;
   memcpy(sync_buffer, b, l);
-  pthread_mutex_unlock(&mutex);  // release lock around write
+  mutex.unlock();  // release lock around write
   if (pwrite(slice->fd, sync_buffer, l, index_offset + o) != (ssize_t)l)
     hdb()->err("unable to save index part %d for gen %d '%s'", p, igen, slice->pathname);
-  pthread_mutex_lock(&mutex);
+  mutex.lock();
   // printf("write index part %d at %lld length %d\n", p, index_offset + o, l);
 }
 
 void Gen::write_upto_index_part(int p, int stop_on_marked) {
-  while (syncing)  // prevent function from being reentered
-    pthread_cond_wait(&write_condition, &mutex);
+  while (syncing) {  // prevent function from being reentered
+    std::unique_lock<std::mutex> lock(mutex, std::adopt_lock);
+    write_condition.wait(lock);
+    lock.release();
+  }
   syncing = 1;
   int broadcast = 0;
   if (p > index_parts) p = index_parts;
@@ -519,7 +510,7 @@ void Gen::write_upto_index_part(int p, int stop_on_marked) {
       sync_part++;
   }
   syncing = 0;
-  if (broadcast) pthread_cond_broadcast(&write_condition);
+  if (broadcast) write_condition.notify_all();
 }
 
 void Gen::write_index() {
@@ -560,19 +551,19 @@ static int verify_element(Gen *g, int e) {
   if (verify_offset(g, i)) return -1;
   Data *d = g->read_data(i);
   if (!d) return -1;
-  printf("key %lu size %d off %d\n", d->chain[0].key, d->size, i->offset);
+  printf("key %llu size %d off %d\n", (unsigned long long)d->chain[0].key, d->size, i->offset);
   delete_aligned(d);
   return 0;
 }
 
 int Gen::verify() {
-  pthread_mutex_lock(&mutex);
+  mutex.lock();
   int ret = 0;
   for (uint32_t b = 0; b < buckets; b++) {
     foreach_contiguous_element(this, e, b, tmp) ret = verify_element(this, e) | ret;
     foreach_overflow_element(this, e, b, tmp) ret = verify_element(this, e) | ret;
   }
-  pthread_mutex_unlock(&mutex);
+  mutex.unlock();
   return ret;
 }
 
@@ -584,10 +575,10 @@ void Gen::free() {
 }
 
 int Gen::close() {
-  pthread_mutex_lock(&mutex);
+  mutex.lock();
   int res = save();
   free();
-  pthread_mutex_unlock(&mutex);
+  mutex.unlock();
   return res;
 }
 
@@ -603,19 +594,19 @@ void Gen::complete_index_sync() {
 }
 
 void Gen::periodic_sync() {
-  pthread_mutex_lock(&mutex);
+  mutex.lock();
   WriteBuffer &w = wbuf[cur_write];
   if (w.start != w.cur && !w.writing) write_buffer();
   write_upto_index_part(sync_part + 1, 1);  // write one more
   if (sync_part >= index_parts) complete_index_sync();
-  pthread_mutex_unlock(&mutex);
+  mutex.unlock();
 }
 
 static void append_footer(WriteBuffer *b) {
   assert(b->cur + FOOTER_SIZE <= b->end);
   Data *dlast = (Data *)b->last;
   Data *d = (Data *)b->cur;
-  memset((void*)d, 0, FOOTER_SIZE);
+  memset((void *)d, 0, FOOTER_SIZE);
   d->magic = DATA_MAGIC;
   d->write_serial = dlast->write_serial;
   uint32_t o = (b->offset + (b->cur - b->start) - b->gen->data_offset) / DATA_BLOCK_SIZE;
@@ -635,7 +626,7 @@ static void write_padding(WriteBuffer *b) {
   uint64_t left = b->gen->data_size - b->pad_position;
   Data *dlast = (Data *)b->last;
   Data *d = (Data *)new_aligned(left);
-  memset((void*)d, 0, left);
+  memset((void *)d, 0, left);
   d->magic = DATA_MAGIC;
   d->write_serial = dlast->write_serial;
   d->slice = b->gen->slice->islice;
@@ -682,7 +673,7 @@ static void *do_write_buffer(WriteBuffer *b) {
   pthread_mutex_unlock(&g->mutex);  // for halgrind
 #endif
   if (padding) write_padding(b);
-  pthread_mutex_lock(&g->mutex);
+  g->mutex.lock();
   if (r < 0)
     g->hdb()->err("write error, errno %d slice %d generation %d offset %lld length %d", errno, g->slice->islice,
                   g->igen, b->offset, b->cur - b->start);
@@ -699,8 +690,8 @@ static void *do_write_buffer(WriteBuffer *b) {
   b->phase = b->next_phase;
   b->next_offset = std::numeric_limits<unsigned long long>::max();  // short circuit test in Gen::read_data
   b->writing = 0;
-  pthread_cond_broadcast(&g->write_condition);
-  pthread_mutex_unlock(&g->mutex);
+  g->write_condition.notify_all();
+  g->mutex.unlock();
   return 0;
 }
 
@@ -736,8 +727,11 @@ void Gen::write_buffer(int force_wrap) {
     n.offset = data_offset + header->write_position;
     n.phase = header->phase;
   }
-  while (p.writing && cmp_wpos(w.offset, w.phase, p.offset, p.phase) >= 0)
-    pthread_cond_wait(&p.gen->write_condition, &p.gen->mutex);
+  while (p.writing && cmp_wpos(w.offset, w.phase, p.offset, p.phase) >= 0) {
+    std::unique_lock<std::mutex> lock(p.gen->mutex, std::adopt_lock);
+    p.gen->write_condition.wait(lock);
+    lock.release();
+  }
   if (parts_done > sync_part) write_upto_index_part(parts_done);
   slice->hdb->thread_pool->add_job((void *(*)(void *))do_write_buffer, (void *)&w);
   return;
@@ -777,15 +771,15 @@ static void *do_write_log_buffer(WriteBuffer *b) {
   if (b->result < 0)
     g->hdb()->err("write error, errno %d slice %d generation %d offset %lld length %d", errno, g->slice->islice,
                   g->igen, b->offset, b->cur - b->start);
-    // printf("wrote log %lld %d \n", b->offset, (int)(b->cur - b->start));
+  // printf("wrote log %lld %d \n", b->offset, (int)(b->cur - b->start));
 #ifndef HELGRIND
-  pthread_mutex_lock(&g->mutex);
+  g->mutex.lock();
 #endif
   g->log_position += b->cur - b->start;
   b->writing = 0;
   b->cur = b->start + sizeof(LogHeaderFooter);
-  pthread_cond_broadcast(&g->write_condition);
-  pthread_mutex_unlock(&g->mutex);
+  g->write_condition.notify_all();
+  g->mutex.unlock();
   return 0;
 }
 
@@ -1097,7 +1091,7 @@ Lagain:
     goto Lagain;
   }
   assert(l + LOG_FOOTER_SIZE <= log_buffer_size);
-  if (b->cur + l + LOG_FOOTER_SIZE >= b->end) {
+  if (b->cur != b->start && b->cur + l + LOG_FOOTER_SIZE >= b->end) {
     wait_for_write_commit(this, wpos, phase);
     write_log_buffer();
     goto Lagain;
@@ -1156,7 +1150,7 @@ int Gen::write(uint64_t *key, int nkeys, HashDB::Marshal *marshal) {
   ((&d->offset)[1]) = 0;  // clear flags
   d->phase = b->phase;
   d->nkeys = nkeys;
-  memset((void*)d->chain, 0, nkeys * sizeof(KeyChain));
+  memset((void *)d->chain, 0, nkeys * sizeof(KeyChain));
   for (int i = 0; i < nkeys; i++) d->chain[i].key = key[i];
   DATA_TO_FOOTER(d)->nkeys = nkeys;
   char *target = (char *)(b->cur + hsize);
@@ -1175,7 +1169,7 @@ int Gen::write(uint64_t *key, int nkeys, HashDB::Marshal *marshal) {
 
 void Gen::chain_keys_for_write(Data *d) {
   for (uint32_t i = 0; i < d->nkeys; i++) {
-    Vec<Index> rd;
+    std::vector<Index> rd;
     find_indexes(d->chain[i].key, rd);
     if (rd.size()) d->chain[i].next = rd[0];
   }
@@ -1200,7 +1194,7 @@ int Gen::write_remove(uint64_t *key, int nkeys, Index *i) {
   d->phase = b->phase;
   d->nkeys = nkeys;
   assert(nkeys);
-  memset((void*)d->chain, 0, nkeys * sizeof(KeyChain));
+  memset((void *)d->chain, 0, nkeys * sizeof(KeyChain));
   for (int j = 0; j < nkeys; j++) d->chain[j].key = key[j];
   DATA_TO_FOOTER(d)->nkeys = nkeys;
   *(Index *)DATA_TO_PTR(d) = *i;
@@ -1213,7 +1207,7 @@ int Gen::write_remove(uint64_t *key, int nkeys, Index *i) {
   return 0;
 }
 
-int Gen::read_element(Index *i, uint64_t key, Vec<HashDB::Extent> &hit) {
+int Gen::read_element(Index *i, uint64_t key, std::vector<HashDB::Extent> &hit) {
   Data *d = read_data(i);
   if (d == BAD_DATA) return -1;
   if (!d) return 0;
@@ -1245,15 +1239,15 @@ Data *Gen::read_data(Index *i) {
       hdb()->warn("state index entry, slice %d generation %d offset %lld", slice->islice, igen, o);
     goto Lreturn;
   }
-  pthread_mutex_unlock(&mutex);
+  mutex.unlock();
   if (pread(slice->fd, buf, l, (off_t)o) != l) {
     delete_aligned(buf);
-    pthread_mutex_lock(&mutex);
+    mutex.lock();
     return (Data *)BAD_DATA;
   }
-  pthread_mutex_lock(&mutex);
+  mutex.lock();
   if (verify_offset(this, i)) goto Lreturn;
-Lfound : {
+Lfound: {
   Data *d = (Data *)buf;
   if (d->remove) goto Lreturn;
   if (check_data(d, o, l, i->offset)) goto Lreturn;
@@ -1266,10 +1260,10 @@ Lreturn:
   return 0;
 }
 
-void Gen::find_indexes(uint64_t key, Vec<Index> &rd) {
+void Gen::find_indexes(uint64_t key, std::vector<Index> &rd) {
   int b = ((uint32_t)key) % buckets;
   uint16_t tag = KEY2TAG(key);
-  Vec<Index> del;
+  std::vector<Index> del;
   unsigned int h = ((uint32_t)(key >> 32) ^ ((uint32_t)key));
   Lookaside *la = &lookaside.v[(h % lookaside.v.size()) * 4];
   for (int a = 0; a < 4; a++) {
@@ -1300,24 +1294,24 @@ void Gen::find_indexes(uint64_t key, Vec<Index> &rd) {
   }
 }
 
-int Gen::read(uint64_t key, Vec<HashDB::Extent> &hit) {
+int Gen::read(uint64_t key, std::vector<HashDB::Extent> &hit) {
   int r = 0;
-  Vec<Index> rd;
-  pthread_mutex_lock(&mutex);
+  std::vector<Index> rd;
+  mutex.lock();
   find_indexes(key, rd);
   if (!rd.size()) r = 2;
   for (size_t x = 0; x < rd.size(); x++) r = read_element(&rd[x], key, hit) | r;
-  pthread_mutex_unlock(&mutex);
+  mutex.unlock();
   return r;
 }
 
-int Gen::next(uint64_t key, Data *d, Vec<HashDB::Extent> &hit) {
+int Gen::next(uint64_t key, Data *d, std::vector<HashDB::Extent> &hit) {
   int r = 0;
   for (uint32_t i = 0; i < d->nkeys; i++) {
     if (d->chain[i].key == key && d->chain[i].next.size) {
-      pthread_mutex_lock(&mutex);
+      mutex.lock();
       r = read_element(&d->chain[i].next, key, hit) | r;
-      pthread_mutex_unlock(&mutex);
+      mutex.unlock();
       return r;
     }
   }

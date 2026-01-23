@@ -36,14 +36,13 @@
 #define LOG_BUFFERS 2
 #define LOG_FOOTER_SIZE (sizeof(LogHeaderFooter))
 
-#define ROUND_TO(_x, _n) (((_x) + ((_n)-1)) & ~((_n)-1))
-#define ROUND_DOWN(_x, _n) ((_x) & ~((_n)-1))
-#define ROUND_DIV(_x, _n) (((_x) + ((_n)-1)) / (_n))
+#define ROUND_TO(_x, _n) (((_x) + ((_n) - 1)) & ~((_n) - 1))
+#define ROUND_DOWN(_x, _n) ((_x) & ~((_n) - 1))
+#define ROUND_DIV(_x, _n) (((_x) + ((_n) - 1)) / (_n))
 #define ROUND_DOWN_SAFE_SECTOR_SIZE(_x) ROUND_DOWN(_x, SAFE_SECTOR_SIZE)
 #define KEY2TAG(_x) ((_x) >> 48)
 #define MODULAR_DIFFERENCE(_x, _y, _m) (((_x) + (_m) - (_y)) % (_m))
 
-#define forv_Vec(_type, _x, _v) for (auto _x : _v)
 #define DELETE(p) \
   do {            \
     delete (p);   \
@@ -56,7 +55,6 @@
 #define DEBUG_LOG_TAG_SHIFT 60
 
 typedef const char cchar;
-#define Vec std::vector
 
 enum DEBUG_LOG_TYPES {
   DEBUG_LOG_EMPTY,
@@ -114,15 +112,15 @@ class NBlockHash {
 };
 
 static inline void *new_aligned(size_t s) {
-    size_t alignment = SAFE_SECTOR_SIZE;
-    // Round s up to the nearest multiple of alignment
-    size_t rounded_s = (s + alignment - 1) & ~(alignment - 1);
-    return aligned_alloc(alignment, rounded_s);
+  void *p = nullptr;
+  size_t alignment = SAFE_SECTOR_SIZE;
+  size_t rounded_s = (s + alignment - 1) & ~(alignment - 1);
+  int res = posix_memalign(&p, alignment, rounded_s);
+  if (res != 0) return nullptr;
+  return p;
 }
 
-static inline void delete_aligned(void *p) {
-    free(p);
-}
+static inline void delete_aligned(void *p) { free(p); }
 
 static inline uint32_t length_to_size(uint64_t l) {
   uint64_t b = DATA_BLOCK_SIZE;
@@ -169,7 +167,7 @@ struct Lookaside {
   uint64_t key;
   Index index;
   // normally index.next is 0, however, for deleted elements, next == 1
-  Lookaside(int zero = 0) { memset((void*)this, 0, sizeof(*this)); }
+  Lookaside(int zero = 0) { memset((void *)this, 0, sizeof(*this)); }
   operator bool() { return index.size != 0; }
 };
 
@@ -251,10 +249,10 @@ struct DebugLogEntry {
 #define element_to_first_in_bucket(_e) (((_e) & ~(ELEMENTS_PER_BUCKET - 1)))
 #define bucket_to_first_element(_b) \
   ((((_b) / BUCKETS_PER_SECTOR) * ELEMENTS_PER_SECTOR) + ((_b) % BUCKETS_PER_SECTOR) * ELEMENTS_PER_BUCKET)
-#define sector_to_bucket(_s) ((_s)*BUCKETS_PER_SECTOR)
+#define sector_to_bucket(_s) ((_s) * BUCKETS_PER_SECTOR)
 #define bucket_to_sector(_b) ((_b) / BUCKETS_PER_SECTOR)
 #define element_to_first_in_sector(_e) ((_e) & ~(ELEMENTS_PER_SECTOR - 1))
-#define sector_to_first_element(_s) ((_s)*ELEMENTS_PER_SECTOR)
+#define sector_to_first_element(_s) ((_s) * ELEMENTS_PER_SECTOR)
 #define element_to_sector(_e) ((_e) / ELEMENTS_PER_SECTOR)
 
 #define overflow_element(_s, _i) (sector_to_first_element(_s) + (BUCKETS_PER_SECTOR * ELEMENTS_PER_BUCKET) + (_i))
