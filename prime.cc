@@ -1,7 +1,7 @@
 /* -*-Mode: c++;-*-
   Copyright (c) 2006-2008 John Plevyak, All Rights Reserved
 */
-#include "plib.h"
+#include <cstdint>
 #include <cstdlib>
 
 #define PASSES 30
