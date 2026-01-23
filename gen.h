@@ -103,6 +103,7 @@ class Gen {
   int save();
   void free();
   void periodic_sync();
+  int _init();
 
   int read(uint64_t key, std::vector<HashDB::Extent> &hit);
   int next(uint64_t key, Data *d, std::vector<HashDB::Extent> &hit);

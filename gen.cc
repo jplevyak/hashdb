@@ -51,7 +51,7 @@ Gen::Gen(Slice *aslice, int aigen) {
 
   for (int i = 0; i < LOG_BUFFERS; i++) lbuf[i].init(this, i);
   for (int i = 0; i < WRITE_BUFFERS; i++) wbuf[i].init(this, i);
-  lookaside.clear();
+  lookaside.resize(1024);
 #ifdef DEBUG_LOG
   init_debug_log();
 #endif
@@ -90,7 +90,7 @@ void Gen::debug_log_it(uint64_t key, Index *i, int tag) {
     memset(debug_log_ptr, 0, sizeof(DebugLogEntry));
 }
 #else
-void Gen::debug_log_it(uint64_t key, Index *i, int tag) { assert(0); }
+void Gen::debug_log_it(uint64_t key, Index *i, int tag) {}
 // #define debug_log_it(a, b, c) // Already defined as empty if needed or just use function
 #endif
 
@@ -254,11 +254,15 @@ void Gen::init_index() {
   }
 }
 
-int Gen::init() {
-  mutex.lock();
+int Gen::_init() {
   init_header();
   init_index();
-  int r = save();
+  return save();
+}
+
+int Gen::init() {
+  mutex.lock();
+  int r = _init();
   mutex.unlock();
   return r;
 }
@@ -398,9 +402,9 @@ int Gen::open() {
   compute_sizes();
   int lh = load_header();
   if (lh < 0 || header->magic != HDB_MAGIC || header->major_version != HDB_MAJOR_VERSION) {
-    if (slice->hdb->reinit_on_open_error || header->magic == 0 || lh < 0)
-      init();
-    else
+    if (slice->hdb->reinit_on_open_error || header->magic == 0 || lh < 0) {
+      _init();
+    } else
       goto Lerror;
   } else {  // normal load path
     compute_sizes(header->size, header->data_per_index);

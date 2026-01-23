@@ -75,7 +75,6 @@ inline void Worker::operator()() {
     pool.tasks.pop();
 
     lock.unlock();
-
     task();
   }
 }

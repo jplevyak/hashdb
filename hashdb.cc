@@ -96,11 +96,15 @@ struct SafeLatch {
   SafeLatch(int n) : count(n) {}
   void count_down() {
     std::lock_guard<std::mutex> lock(m);
-    if (--count == 0) cv.notify_all();
+    if (--count == 0) {
+      cv.notify_all();
+    }
   }
   void wait() {
     std::unique_lock<std::mutex> lock(m);
-    while (count > 0) cv.wait(lock);
+    while (count > 0) {
+      cv.wait(lock);
+    }
   }
 };
 
@@ -512,8 +516,10 @@ int HashDB::close() {
     s->fd = -1;
   }
   hdb->free_slices();
-  if (hdb->thread_pool_allocated) DELETE(thread_pool);
-  thread_pool = 0;
+  if (hdb->thread_pool_allocated) {
+    delete thread_pool;
+    thread_pool = 0;
+  }
   hdb->mutex.unlock();
   return res;
 }
