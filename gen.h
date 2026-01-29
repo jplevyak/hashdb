@@ -107,7 +107,7 @@ class Gen {
 
   int read(uint64_t key, std::vector<HashDB::Extent> &hit);
   int next(uint64_t key, Data *d, std::vector<HashDB::Extent> &hit);
-  int write(uint64_t *key, int nkeys, HashDB::Marshal *marshal);
+  int write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::SerializeFn serializer);
   int write_remove(uint64_t *key, int nkeys, Index *i);
   int read_element(Index *i, uint64_t key, std::vector<HashDB::Extent> &hit);
   Data *read_data(Index *i);

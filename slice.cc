@@ -151,10 +151,10 @@ int Slice::might_exist(uint64_t key) {
   return 0;
 }
 
-int Slice::write(uint64_t *key, int nkeys, HashDB::Marshal *marshal, HashDB::SyncMode mode) {
+int Slice::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::SerializeFn serializer, HashDB::SyncMode mode) {
   Gen *g = gen[0];
   g->mutex.lock();
-  int res = g->write(key, nkeys, marshal);
+  int res = g->write(key, nkeys, value_len, serializer);
   if (!res) {
     if (mode == HashDB::SyncMode::Sync || mode == HashDB::SyncMode::Flush) {
       WriteBuffer *b = &g->wbuf[g->cur_write];

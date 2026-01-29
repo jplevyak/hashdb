@@ -11,6 +11,7 @@
 #include "threadpool.h"
 
 #include <functional>
+#include <span>
 
 #define HASHDB_SLICE_SIZE_MAX ((uint64_t)-1)
 
@@ -27,23 +28,7 @@ class HashDB {
   using WriteCallback = std::function<void(int)>;
   using ReadCallback = std::function<void(int, std::vector<Extent>)>;
 
-  class Marshal {
-   public:
-    virtual uint64_t marshal_size() = 0;      // Must always be greater than actual
-    virtual uint64_t marshal(char *buf) = 0;  // Returns actual size.
-  };
-
-  class Copy : public Marshal {
-   public:
-    void *p;
-    uint64_t len;
-    uint64_t marshal_size() { return len; }
-    uint64_t marshal(char *buf) {
-      memcpy(buf, p, len);
-      return len;
-    }
-    Copy(void *ap, int alen) : p(ap), len(alen) {}
-  };
+  using SerializeFn = std::function<uint64_t(std::span<uint8_t>)>;
 
   // Specify a contiguous part of the database, may be a raw disk, directory or file.
   // The "size" is the size that will be used or allocated, and -1
@@ -64,24 +49,30 @@ class HashDB {
   // When a callback is provided, "data" and "keys" must be valid
   //   till the callback is called.
   // Returns 0 on success, -1 on an error.
-  int write(uint64_t *key, int nkeys, Marshal *marshal, WriteCallback callback = nullptr,
+  int write(uint64_t *key, int nkeys, uint64_t value_len, SerializeFn serializer, WriteCallback callback = nullptr,
             SyncMode mode = SyncMode::Async);
-  int write(uint64_t *key, int nkeys, void *data, int len, WriteCallback callback = nullptr,
+  int write(uint64_t *key, int nkeys, const void *data, int len, WriteCallback callback = nullptr,
             SyncMode mode = SyncMode::Async) {
-    Copy cp(data, len);
-    return write(key, nkeys, &cp, callback, mode);
+    return write(
+        key, nkeys, len,
+        [data, len](std::span<uint8_t> buf) {
+          memcpy(buf.data(), data, len);
+          return len;
+        },
+        callback, mode);
   }
-  int write(uint64_t key, void *data, int len, WriteCallback callback = nullptr, SyncMode mode = SyncMode::Async) {
+  int write(uint64_t key, const void *data, int len, WriteCallback callback = nullptr,
+            SyncMode mode = SyncMode::Async) {
     return write(&key, 1, data, len, callback, mode);
   }
   // Convenience for just SyncMode without callback
-  int write(uint64_t *key, int nkeys, Marshal *marshal, SyncMode mode) {
-    return write(key, nkeys, marshal, nullptr, mode);
+  int write(uint64_t *key, int nkeys, uint64_t value_len, SerializeFn serializer, SyncMode mode) {
+    return write(key, nkeys, value_len, serializer, nullptr, mode);
   }
-  int write(uint64_t *key, int nkeys, void *data, int len, SyncMode mode) {
+  int write(uint64_t *key, int nkeys, const void *data, int len, SyncMode mode) {
     return write(key, nkeys, data, len, nullptr, mode);
   }
-  int write(uint64_t key, void *data, int len, SyncMode mode) { return write(key, data, len, nullptr, mode); }
+  int write(uint64_t key, const void *data, int len, SyncMode mode) { return write(key, data, len, nullptr, mode); }
 
   // Remove mapping for all keys of old_data, a result of HashDB::read
   int remove(void *old_data, WriteCallback callback = nullptr, SyncMode mode = SyncMode::Async);

@@ -278,18 +278,21 @@ struct Writer {
   Slice *s;
   uint64_t *key;
   int nkeys;
-  HashDB::Marshal *marshal;
+  uint64_t value_len;
+  HashDB::SerializeFn serializer;
   void *old_data;
   SafeLatch *latch;
   ssize_t result;
   HashDB::WriteCallback callback;
   HashDB::SyncMode mode;
 
-  void init(Slice *as, uint64_t *akey, int ankeys, HashDB::Marshal *amarshal, SafeLatch *alatch) {
+  void init(Slice *as, uint64_t *akey, int ankeys, uint64_t avalue_len, HashDB::SerializeFn aserializer,
+            SafeLatch *alatch) {
     s = as;
     key = akey;
     nkeys = ankeys;
-    marshal = amarshal;
+    value_len = avalue_len;
+    serializer = aserializer;
     latch = alatch;
     result = 0;
   }
@@ -297,7 +300,7 @@ struct Writer {
 
 #ifdef INCOMPLETE_REPLICATION_CODE
 static void *do_write(Writer *w) {
-  w->result = w->s->write(w->key, w->nkeys, w->marshal) | w->result;
+  w->result = w->s->write(w->key, w->nkeys, w->value_len, w->serializer, w->mode) | w->result;
   w->barrier->arrive_and_wait();
   return 0;
 }
@@ -310,19 +313,20 @@ static void *do_write_callback(Writer *w) {
   } else {
     SafeLatch latch(r);
     for (int i = 0; i < r; i++) {
-      w[i].init(w->s->hdb->slice[i], w->key, w->nkeys, w->marshal, &latch);
+      w[i].init(w->s->hdb->slice[i], w->key, w->nkeys, w->value_len, w->serializer, &latch);
       w->s->hdb->thread_pool->add_job((void *(*)(void *))do_write, (void *)&w[i]);
     }
     latch.wait();
   }
 #endif
-  w->result = w->s->write(w->key, w->nkeys, w->marshal, w->mode);
+  w->result = w->s->write(w->key, w->nkeys, w->value_len, w->serializer, w->mode);
   if (w->callback) w->callback(w->result);
   delete_aligned(w);
   return 0;
 }
 
-int HashDB::write(uint64_t *key, int nkeys, Marshal *marshal, WriteCallback callback, SyncMode mode) {
+int HashDB::write(uint64_t *key, int nkeys, uint64_t value_len, SerializeFn serializer, WriteCallback callback,
+                  SyncMode mode) {
   HDB *hdb = ((HDB *)this);
 #ifdef HELGRIND
   hdb->mutex.lock();
@@ -332,20 +336,20 @@ int HashDB::write(uint64_t *key, int nkeys, Marshal *marshal, WriteCallback call
 #ifdef HELGRIND
   hdb->mutex.unlock();
 #endif
-  if (!callback) return hdb->slice[s % hdb->slice.size()]->write(key, nkeys, marshal, mode);
+  if (!callback) return hdb->slice[s % hdb->slice.size()]->write(key, nkeys, value_len, serializer, mode);
 #ifdef INCOMPLETE_REPLICATION_CODE
   {
     int r = 0;
     assert(!"replication not implemented");
     if (mode == SyncMode::Async) {
       for (int i = 0; i < r; i++)  // incomplete
-        r = hdb->slice[(s + i) % hdb->slice.size()]->write(key, nkeys, marshal, mode) | r;
+        r = hdb->slice[(s + i) % hdb->slice.size()]->write(key, nkeys, value_len, serializer, mode) | r;
     } else {
       barrier_t barrier;
       std::vector<Writer> writer(r);
       barrier_init(&barrier, n);
       for (int i = 0; i < r; i++) {  // incomplete
-        writer[i].init(hdb->slice[(s + i) % hdb->slice.size()], key, nkeys, marshal, &barrier);
+        writer[i].init(hdb->slice[(s + i) % hdb->slice.size()], key, nkeys, value_len, serializer, &barrier);
         hdb->thread_pool->add_job((void *(*)(void *))do_write, (void *)&writer[i]);
       }
       barrier_wait(&barrier);
@@ -362,7 +366,8 @@ int HashDB::write(uint64_t *key, int nkeys, Marshal *marshal, WriteCallback call
   awriter[0].mode = mode;
   awriter[0].key = key;
   awriter[0].nkeys = nkeys;
-  awriter[0].marshal = marshal;
+  awriter[0].value_len = value_len;
+  awriter[0].serializer = serializer;
   hdb->thread_pool->add_job((void *(*)(void *))do_write_callback, (void *)&awriter[0]);
   return 0;
 }

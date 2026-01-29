@@ -1135,8 +1135,8 @@ int Gen::delete_lookaside(uint64_t key, Index *i) {
   return r;
 }
 
-int Gen::write(uint64_t *key, int nkeys, HashDB::Marshal *marshal) {
-  uint64_t len = marshal->marshal_size();
+int Gen::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::SerializeFn serializer) {
+  uint64_t len = value_len;
   uint64_t hsize = sizeof(Data) + sizeof(DataFooter) + (nkeys - 1) * sizeof(uint64_t);
   uint32_t size = length_to_size(len + hsize);
   uint64_t l = size_to_length(size);
@@ -1158,7 +1158,8 @@ int Gen::write(uint64_t *key, int nkeys, HashDB::Marshal *marshal) {
   for (int i = 0; i < nkeys; i++) d->chain[i].key = key[i];
   DATA_TO_FOOTER(d)->nkeys = nkeys;
   char *target = (char *)(b->cur + hsize);
-  uint64_t actual_len = marshal->marshal(target);
+  std::span<uint8_t> s((uint8_t *)target, len);
+  uint64_t actual_len = serializer(s);
   if (l != actual_len + hsize) memset(target + actual_len, 0, l - (actual_len + hsize));
   d->length = actual_len;
   d->size = size;
