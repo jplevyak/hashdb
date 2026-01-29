@@ -26,10 +26,8 @@
 #include <cstring>
 
 // Static members of HashDB
-HashDB::Callback *HashDB::SYNC = (HashDB::Callback *)(uintptr_t)1;
-HashDB::Callback *HashDB::FLUSH = (HashDB::Callback *)(uintptr_t)2;
-HashDB::Callback *HashDB::ASYNC = (HashDB::Callback *)(uintptr_t)0;
-#define SPECIAL_CALLBACK(_c) (((uintptr_t)(_c)) <= 2)
+// Static members of HashDB removed
+#define SPECIAL_CALLBACK(_c) 0  // Removed usage logic implies we check callback != nullptr
 
 // HDB Implementation
 
@@ -220,11 +218,6 @@ int HashDB::next(uint64_t key, void *old_data, std::vector<Extent> &hit) {
   return r;
 }
 
-int HashDB::next(uint64_t key, void *old_data, Callback *callback, bool immediate_miss) {
-  assert(0);
-  return 0;
-}
-
 struct Reader {
   Slice *s;
   uint64_t key;
@@ -232,7 +225,7 @@ struct Reader {
   std::vector<HashDB::Extent> hit;
   int found;  // only for master (0)
   ssize_t result;
-  HashDB::Callback *callback;
+  HashDB::ReadCallback callback;
 
   void init(Slice *as, uint64_t akey) {
     s = as;
@@ -255,13 +248,14 @@ static void *do_read_callback(Reader *r) {
     r->s->hdb->thread_pool->add_job((void *(*)(void *))do_read, (void *)&r[i]);
   }
   latch.wait();
-  for (int i = 0; i < r->found; i++) r->callback->hit.insert(r->callback->hit.end(), r[i].hit.begin(), r[i].hit.end());
-  r->callback->done(r->result);
+  std::vector<HashDB::Extent> hits;
+  for (int i = 0; i < r->found; i++) hits.insert(hits.end(), r[i].hit.begin(), r[i].hit.end());
+  if (r->callback) r->callback(r->result, hits);
   delete_aligned(r);
   return 0;
 }
 
-int HashDB::read(uint64_t key, Callback *callback, bool immediate_miss) {
+int HashDB::read(uint64_t key, ReadCallback callback, bool immediate_miss) {
   HDB *hdb = ((HDB *)this);
   int n = hdb->slice.size(), found = 0;
   std::vector<Reader> reader(n);
@@ -288,7 +282,8 @@ struct Writer {
   void *old_data;
   SafeLatch *latch;
   ssize_t result;
-  HashDB::Callback *callback;
+  HashDB::WriteCallback callback;
+  HashDB::SyncMode mode;
 
   void init(Slice *as, uint64_t *akey, int ankeys, HashDB::Marshal *amarshal, SafeLatch *alatch) {
     s = as;
@@ -321,13 +316,13 @@ static void *do_write_callback(Writer *w) {
     latch.wait();
   }
 #endif
-  w->result = w->s->write(w->key, w->nkeys, w->marshal, w->callback->flush ? HASHDB_FLUSH : HASHDB_SYNC);
-  w->callback->done(w->result);
+  w->result = w->s->write(w->key, w->nkeys, w->marshal, w->mode);
+  if (w->callback) w->callback(w->result);
   delete_aligned(w);
   return 0;
 }
 
-int HashDB::write(uint64_t *key, int nkeys, Marshal *marshal, Callback *callback) {
+int HashDB::write(uint64_t *key, int nkeys, Marshal *marshal, WriteCallback callback, SyncMode mode) {
   HDB *hdb = ((HDB *)this);
 #ifdef HELGRIND
   hdb->mutex.lock();
@@ -337,14 +332,14 @@ int HashDB::write(uint64_t *key, int nkeys, Marshal *marshal, Callback *callback
 #ifdef HELGRIND
   hdb->mutex.unlock();
 #endif
-  if (SPECIAL_CALLBACK(callback)) return hdb->slice[s % hdb->slice.size()]->write(key, nkeys, marshal, callback);
+  if (!callback) return hdb->slice[s % hdb->slice.size()]->write(key, nkeys, marshal, mode);
 #ifdef INCOMPLETE_REPLICATION_CODE
   {
     int r = 0;
     assert(!"replication not implemented");
-    if (callback == ASYNC) {
+    if (mode == SyncMode::Async) {
       for (int i = 0; i < r; i++)  // incomplete
-        r = hdb->slice[(s + i) % hdb->slice.size()]->write(key, nkeys, marshal) | r;
+        r = hdb->slice[(s + i) % hdb->slice.size()]->write(key, nkeys, marshal, mode) | r;
     } else {
       barrier_t barrier;
       std::vector<Writer> writer(r);
@@ -364,6 +359,7 @@ int HashDB::write(uint64_t *key, int nkeys, Marshal *marshal, Callback *callback
   Writer *awriter = (Writer *)new_aligned(size);
   awriter[0].s = hdb->slice[s];
   awriter[0].callback = callback;
+  awriter[0].mode = mode;
   awriter[0].key = key;
   awriter[0].nkeys = nkeys;
   awriter[0].marshal = marshal;
@@ -406,20 +402,20 @@ static inline void wait_for_log_flush(Gen *g, int wait_msec) {
 }
 
 static void *do_remove_callback(Writer *w) {
-  w->result = w->s->hdb->remove(w->old_data, w->callback->flush ? HASHDB_FLUSH : HASHDB_SYNC);
-  w->callback->done(w->result);
+  w->result = w->s->hdb->remove(w->old_data, nullptr, w->mode);
+  if (w->callback) w->callback(w->result);
   delete_aligned(w);
   return 0;
 }
 
-int HashDB::remove(void *old_data, Callback *callback) {
+int HashDB::remove(void *old_data, WriteCallback callback, SyncMode mode) {
   HDB *hdb = ((HDB *)this);
   Data *d = PTR_TO_DATA(old_data);
   if (d->magic != DATA_MAGIC) return -1;
   if ((int)d->slice >= hdb->slice.size()) return -1;
   Slice *s = hdb->slice[d->slice];
   if ((int)d->gen >= s->gen.size()) return -1;
-  if (SPECIAL_CALLBACK(callback)) {
+  if (!callback) {
     Gen *g = s->gen[d->gen];
     int r = 0;
     g->mutex.lock();
@@ -431,8 +427,8 @@ int HashDB::remove(void *old_data, Callback *callback) {
     for (int i = 0; i < (int)d->nkeys; i++)
       if (!g->delete_lookaside(keys[i], &iindex)) g->insert_lookaside(keys[i], &dindex);
     g->insert_log(keys.data(), d->nkeys, &dindex);
-    if (callback) {
-      if (callback == HASHDB_FLUSH) {
+    if (mode == SyncMode::Sync || mode == SyncMode::Flush) {
+      if (mode == SyncMode::Flush) {
         wait_for_write_commit(g, g->header->write_position, g->header->phase);
         if (g->lbuf[g->cur_log].start != g->lbuf[g->cur_log].cur) g->write_log_buffer();
       } else
@@ -446,6 +442,7 @@ int HashDB::remove(void *old_data, Callback *callback) {
   Writer *awriter = (Writer *)new_aligned(size);
   awriter[0].s = s;
   awriter[0].callback = callback;
+  awriter[0].mode = mode;
   awriter[0].old_data = old_data;
   hdb->thread_pool->add_job((void *(*)(void *))do_remove_callback, (void *)&awriter[0]);
   return 0;

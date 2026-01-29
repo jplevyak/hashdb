@@ -151,14 +151,14 @@ int Slice::might_exist(uint64_t key) {
   return 0;
 }
 
-int Slice::write(uint64_t *key, int nkeys, HashDB::Marshal *marshal, HashDB::Callback *callback) {
+int Slice::write(uint64_t *key, int nkeys, HashDB::Marshal *marshal, HashDB::SyncMode mode) {
   Gen *g = gen[0];
   g->mutex.lock();
   int res = g->write(key, nkeys, marshal);
   if (!res) {
-    if (callback == HASHDB_SYNC || callback == HASHDB_FLUSH) {
+    if (mode == HashDB::SyncMode::Sync || mode == HashDB::SyncMode::Flush) {
       WriteBuffer *b = &g->wbuf[g->cur_write];
-      if (callback == HASHDB_FLUSH) {
+      if (mode == HashDB::SyncMode::Flush) {
         g->write_buffer();
         // wait_for_write_to_complete(b); // TODO: need to make this visible or reimplement?
         // Wait for write to complete logic
@@ -190,7 +190,6 @@ int Slice::write(uint64_t *key, int nkeys, HashDB::Marshal *marshal, HashDB::Cal
           lock.release();
         }
       }
-    } else if (callback != HASHDB_ASYNC) {
     }
   }
   g->mutex.unlock();

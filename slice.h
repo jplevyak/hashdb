@@ -23,7 +23,7 @@ class Slice {
   int open();
   int might_exist(uint64_t key);
   int read(uint64_t key, std::vector<HashDB::Extent> &hit);
-  int write(uint64_t *key, int nkeys, HashDB::Marshal *marshal, HashDB::Callback *callback);
+  int write(uint64_t *key, int nkeys, HashDB::Marshal *marshal, HashDB::SyncMode mode);
   int verify();
   int close();
 

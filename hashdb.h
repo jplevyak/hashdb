@@ -10,17 +10,13 @@
 
 #include "threadpool.h"
 
+#include <functional>
+
 #define HASHDB_SLICE_SIZE_MAX ((uint64_t)-1)
-#define HASHDB_SYNC ((HashDB::Callback *)(uintptr_t)2)   // wait at most sync_wait_msec
-#define HASHDB_FLUSH ((HashDB::Callback *)(uintptr_t)1)  // flush immediately
-#define HASHDB_ASYNC ((HashDB::Callback *)(uintptr_t)0)  // do not wait for flush
 
 class HashDB {
  public:
-  class Callback;
-  static HashDB::Callback *SYNC;
-  static HashDB::Callback *FLUSH;
-  static HashDB::Callback *ASYNC;
+  enum class SyncMode { Async, Flush, Sync };
 
   struct Extent {
     void *data;
@@ -28,16 +24,8 @@ class HashDB {
     operator bool() { return !data && !len; }
   };
 
-  // callback after write equivalent to HASHDB_SYNC
-  class Callback {
-   public:
-    typedef void (*cb_fn_t)(int);
-    cb_fn_t callbackfn;
-    bool flush;
-    std::vector<Extent> hit;
-    virtual void done(int result) { callbackfn(result); }
-    Callback(cb_fn_t fn = 0, bool aflush = false) : callbackfn(fn), flush(aflush) {}
-  };
+  using WriteCallback = std::function<void(int)>;
+  using ReadCallback = std::function<void(int, std::vector<Extent>)>;
 
   class Marshal {
    public:
@@ -70,27 +58,38 @@ class HashDB {
   // Returned chunks are free'd with free_chunk().
   // Returns 0 on success, 1 on a miss, -1 on an error.
   int read(uint64_t key, std::vector<Extent> &hit);
-  int read(uint64_t key, Callback *callback, bool immediate_miss = false);
+  int read(uint64_t key, ReadCallback callback, bool immediate_miss = false);
 
   // Write a continguous block of data and associate with the given key(s).
   // When a callback is provided, "data" and "keys" must be valid
   //   till the callback is called.
   // Returns 0 on success, -1 on an error.
-  int write(uint64_t *key, int nkeys, Marshal *marshal, Callback *callback = HashDB::ASYNC);
-  int write(uint64_t *key, int nkeys, void *data, int len, Callback *callback = HashDB::ASYNC) {
+  int write(uint64_t *key, int nkeys, Marshal *marshal, WriteCallback callback = nullptr,
+            SyncMode mode = SyncMode::Async);
+  int write(uint64_t *key, int nkeys, void *data, int len, WriteCallback callback = nullptr,
+            SyncMode mode = SyncMode::Async) {
     Copy cp(data, len);
-    return write(key, nkeys, &cp, callback);
+    return write(key, nkeys, &cp, callback, mode);
   }
-  int write(uint64_t key, void *data, int len, Callback *callback = HashDB::ASYNC) {
-    return write(&key, 1, data, len, callback);
+  int write(uint64_t key, void *data, int len, WriteCallback callback = nullptr, SyncMode mode = SyncMode::Async) {
+    return write(&key, 1, data, len, callback, mode);
   }
+  // Convenience for just SyncMode without callback
+  int write(uint64_t *key, int nkeys, Marshal *marshal, SyncMode mode) {
+    return write(key, nkeys, marshal, nullptr, mode);
+  }
+  int write(uint64_t *key, int nkeys, void *data, int len, SyncMode mode) {
+    return write(key, nkeys, data, len, nullptr, mode);
+  }
+  int write(uint64_t key, void *data, int len, SyncMode mode) { return write(key, data, len, nullptr, mode); }
 
   // Remove mapping for all keys of old_data, a result of HashDB::read
-  int remove(void *old_data, Callback *callback = HashDB::ASYNC);
+  int remove(void *old_data, WriteCallback callback = nullptr, SyncMode mode = SyncMode::Async);
+  int remove(void *old_data, SyncMode mode) { return remove(old_data, nullptr, mode); }
 
   // Get chained collision match
   int next(uint64_t key, void *old_data, std::vector<Extent> &hit);
-  int next(uint64_t key, void *old_data, Callback *callback, bool immediate_miss = false);
+  // int next(uint64_t key, void *old_data, Callback *callback, bool immediate_miss = false); // Deprecated/Unused?
 
   int get_keys(void *old_data, std::vector<uint64_t> &keys);
   int close();             // Close all slices.

@@ -44,7 +44,7 @@ void test_basic_ops() {
   std::string data = "Hello, HashDB!";
 
   // Write
-  int res = db->write(key, (void *)data.c_str(), data.length() + 1, HashDB::SYNC);
+  int res = db->write(key, (void *)data.c_str(), data.length() + 1, HashDB::SyncMode::Sync);
   check(res == 0, "Basic Write");
 
   // Read
@@ -79,7 +79,7 @@ void test_large_value() {
   size_t size = 100 * 1024;  // 100KB
   std::string data = random_string(size);
 
-  int res = db->write(key, (void *)data.c_str(), size, HashDB::SYNC);
+  int res = db->write(key, (void *)data.c_str(), size, HashDB::SyncMode::Sync);
   check(res == 0, "Large Value Write");
 
   std::vector<HashDB::Extent> hits;
@@ -114,11 +114,11 @@ void test_many_keys() {
   for (int i = 0; i < N; ++i) {
     keys.push_back(0x3000000000000000ul + i);
     values.push_back("Value_" + std::to_string(i));
-    db->write(keys[i], (void *)values[i].c_str(), values[i].length() + 1, HashDB::ASYNC);
+    db->write(keys[i], (void *)values[i].c_str(), values[i].length() + 1, HashDB::SyncMode::Async);
   }
 
   // Sync at end to flush all async writes
-  db->write(0xFFFFFFFFFFFFFFFFul, (void *)"sync", 5, HashDB::SYNC);
+  db->write(0xFFFFFFFFFFFFFFFFul, (void *)"sync", 5, HashDB::SyncMode::Sync);
 
   std::cout << "Verifying " << N << " keys..." << std::endl;
   int found_count = 0;
@@ -150,7 +150,7 @@ void test_persistence() {
     HashDB *db = new_HashDB();
     db->slice(".", 100000000);
     db->open();
-    db->write(key, (void *)val.c_str(), val.length() + 1, HashDB::SYNC);
+    db->write(key, (void *)val.c_str(), val.length() + 1, HashDB::SyncMode::Sync);
     db->close();
     delete db;
   }
