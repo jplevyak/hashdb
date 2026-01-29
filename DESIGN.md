@@ -94,6 +94,32 @@ After log recovery, the system scans the main data area to recover any writes th
 *   **Replay**: Valid data chunks are replayed using `commit_data()`, which adds them to the [Index](hashdb_internal.h#161-162) and removes them from the [LookasideCache](hashdb_internal.h#183).
 *   **Termination**: Recovery stops when it encounters invalid data, a mismatch in write serials, or unwritten space, effectively establishing the new valid tail of the log.
 
+## Performance Analysis
+
+### Read Performance
+*   **Index Lookup**: The [Index](hashdb_internal.h#161-162) is memory-mapped.
+    *   *Hot Index*: **0 seeks** (hits in RAM).
+    *   *Cold Index*: **1 random read** (page fault).
+*   **Data Read**:
+    *   **Small Objects** (fit in one block): **1 seek + 1 read** (fetching Header + KeyChain + Value).
+    *   **Large Objects**: **1 seek + sequential reads**.
+*   **Total**: Typically **1 random read** (cached index) or **2 random reads** (cold index).
+
+### Write Performance
+HashDB uses a Log-Structured Merge (LSM)-like append-only approach for the current generation.
+*   **Buffer Append**: **0 I/O** (in-memory memcpy to [WriteBuffer](gen.h#9-26)).
+*   **Log Flush (Async)**: Background sequential writes. Effectively **0 seek** latency for the writer.
+*   **Log Flush (Sync)**:
+    1.  Append Data: 1 sequential write.
+    2.  Append Log Metadata: 1 sequential write.
+    *   **Total**: **2 sequential writes** (often merged by OS I/O scheduler).
+
+### Recovery Performance
+Recovery cost is proportional to the amount of data written since the last successful sync/snapshot.
+*   **Log Recovery**: Sequential read of the uncommitted Log area.
+*   **Data Recovery**: Sequential scan of the Data tail (from last commit point).
+*   **Average Cost**: Linear scan of the "dirty" tail (Sequential I/O), which is generally fast.
+
 ## Concurrency
 *   **Thread Pool**: [HDB](hdb.h#11-36) manages a thread pool for parallel operations across slices.
 *   **Locking**:
