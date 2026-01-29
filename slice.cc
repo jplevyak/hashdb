@@ -134,17 +134,35 @@ int Slice::read(uint64_t key, std::vector<HashDB::Extent> &hit) {
 
 int Slice::might_exist(uint64_t key) {
   int buckets = gen[0]->buckets;
-  int b = key % buckets;
+  int b = ((uint32_t)key) % buckets;
   uint16_t tag = KEY2TAG(key);
   for (auto g : gen) {
     g->mutex.lock();
+    unsigned int h = ((uint32_t)(key >> 32) ^ ((uint32_t)key));
+    if (g->lookaside.n) {
+      Lookaside *la = &g->lookaside.v[(h % g->lookaside.n) * 4];
+      for (int a = 0; a < 4; a++) {
+        if (key == la[a].key) {
+          if (!la[a].index.next) {
+            g->mutex.unlock();
+            return 1;
+          }
+        }
+      }
+    }
     foreach_contiguous_element(g, e, b, tmp) {
       Index *i = g->index(e);
-      if (i->tag == tag && i->size) return 1;
+      if (i->tag == tag && i->size) {
+        g->mutex.unlock();
+        return 1;
+      }
     }
     foreach_overflow_element(g, e, b, tmp) {
       Index *i = g->index(e);
-      if (i->tag == tag && i->size) return 1;
+      if (i->tag == tag && i->size) {
+        g->mutex.unlock();
+        return 1;
+      }
     }
     g->mutex.unlock();
   }

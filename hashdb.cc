@@ -251,7 +251,7 @@ static void *do_read_callback(Reader *r) {
   std::vector<HashDB::Extent> hits;
   for (int i = 0; i < r->found; i++) hits.insert(hits.end(), r[i].hit.begin(), r[i].hit.end());
   if (r->callback) r->callback(r->result, hits);
-  delete_aligned(r);
+  delete[] r;
   return 0;
 }
 
@@ -263,8 +263,8 @@ int HashDB::read(uint64_t key, ReadCallback callback, bool immediate_miss) {
     if (hdb->slice[i]->might_exist(key)) reader[found++].init(hdb->slice[i], key);
   }
   if (immediate_miss && !found) return 1;
-  int size = sizeof(Reader) * (found ? found : 1);
-  Reader *areader = (Reader *)new_aligned(size);
+  int size = (found ? found : 1);
+  Reader *areader = new Reader[size];
   for (int i = 0; i < found; i++) areader[i] = reader[i];
   areader[0].s = hdb->slice[0];
   areader[0].found = found;
@@ -321,7 +321,7 @@ static void *do_write_callback(Writer *w) {
 #endif
   w->result = w->s->write(w->key, w->nkeys, w->value_len, w->serializer, w->mode);
   if (w->callback) w->callback(w->result);
-  delete_aligned(w);
+  delete[] w;
   return 0;
 }
 
@@ -359,8 +359,7 @@ int HashDB::write(uint64_t *key, int nkeys, uint64_t value_len, SerializeFn seri
   }
 #endif
   int nn = 1;
-  int size = sizeof(Writer) * nn;
-  Writer *awriter = (Writer *)new_aligned(size);
+  Writer *awriter = new Writer[nn];
   awriter[0].s = hdb->slice[s];
   awriter[0].callback = callback;
   awriter[0].mode = mode;
@@ -368,6 +367,9 @@ int HashDB::write(uint64_t *key, int nkeys, uint64_t value_len, SerializeFn seri
   awriter[0].nkeys = nkeys;
   awriter[0].value_len = value_len;
   awriter[0].serializer = serializer;
+  awriter[0].latch = nullptr;
+  awriter[0].old_data = nullptr;
+  awriter[0].result = 0;
   hdb->thread_pool->add_job((void *(*)(void *))do_write_callback, (void *)&awriter[0]);
   return 0;
 }
@@ -624,7 +626,15 @@ int HashDB::write(uint64_t *key, int nkeys, const void *data, int len, WriteCall
 }
 
 int HashDB::write(uint64_t key, const void *data, int len, WriteCallback callback, SyncMode mode) {
-  return write(&key, 1, data, len, callback, mode);
+  if (mode == SyncMode::Sync) return write(&key, 1, data, len, callback, mode);
+  uint64_t *k = new uint64_t(key);
+  return write(
+      k, 1, data, len,
+      [k, callback](int res) {
+        delete k;
+        if (callback) callback(res);
+      },
+      mode);
 }
 
 int HashDB::write(uint64_t *key, int nkeys, uint64_t value_len, SerializeFn serializer, SyncMode mode) {
@@ -636,7 +646,7 @@ int HashDB::write(uint64_t *key, int nkeys, const void *data, int len, SyncMode 
 }
 
 int HashDB::write(uint64_t key, const void *data, int len, SyncMode mode) {
-  return write(key, data, len, nullptr, mode);
+  return write(&key, 1, data, len, nullptr, mode);
 }
 
 int HashDB::remove(void *old_data, SyncMode mode) { return remove(old_data, nullptr, mode); }

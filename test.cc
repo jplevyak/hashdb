@@ -6,6 +6,7 @@
 #include <cassert>
 #include <random>
 #include <unistd.h>  // for unlink
+#include <atomic>
 
 // Helper for assertions
 void check(bool condition, const std::string &message) {
@@ -177,6 +178,74 @@ void test_persistence() {
   }
 }
 
+void test_async_callbacks() {
+  std::cout << "\n--- TEST: Async Callbacks ---" << std::endl;
+  HashDB *db = new_HashDB();
+  db->slice(".", 100000000);
+  db->open();
+
+  uint64_t key = 0x5555555555555555ul;
+  std::string val = "Async Data";
+
+  // Test Async Write Callback
+  std::atomic<bool> write_done(false);
+  int write_res = -999;
+
+  db->write(
+      key, (void *)val.c_str(), val.length() + 1,
+      [&](int res) {
+        write_res = res;
+        write_done = true;
+      },
+      HashDB::SyncMode::Async);
+
+  // Wait for callback
+  int tries = 0;
+  while (!write_done && tries++ < 100) {
+    usleep(1000);  // 1ms
+  }
+
+  // Force a sync if it hasn't happened
+  db->write(0xFFFFFFFFFFFFFFFFul, (void *)"sync", 5, HashDB::SyncMode::Sync);
+
+  // Re-check after sync
+  while (!write_done && tries++ < 200) {
+    usleep(1000);
+  }
+
+  check(write_done, "Async Write Callback Executed");
+  check(write_res == 0, "Async Write Success");
+
+  // Test Read Callback
+  std::atomic<bool> read_done(false);
+  std::vector<HashDB::Extent> result_hits;
+  int read_res = -999;
+
+  db->read(key, [&](int res, std::vector<HashDB::Extent> hits) {
+    read_res = res;
+    result_hits = hits;
+    read_done = true;
+  });
+
+  tries = 0;
+  while (!read_done && tries++ < 100) {
+    usleep(1000);
+  }
+
+  check(read_done, "Async Read Callback Executed");
+  check(read_res == 0, "Async Read Success");
+
+  bool content_match = false;
+  for (auto &h : result_hits) {
+    if (h.data && strcmp((char *)h.data, val.c_str()) == 0) content_match = true;
+    db->free_chunk(h.data);
+  }
+  check(content_match, "Async Read Content Match");
+
+  db->close();
+  delete db;
+}
+
 int main() {
   // Clean start
   unlink("hashdb.data");
@@ -185,6 +254,7 @@ int main() {
   test_large_value();
   test_many_keys();
   test_persistence();
+  test_async_callbacks();
 
   std::cout << "\nSIU: ALL TESTS PASSED" << std::endl;
   return 0;

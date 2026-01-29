@@ -925,12 +925,12 @@ void Gen::commit_data(Data *d) {
       if (delete_lookaside(d->chain[i].key, index))
         delete_key(d->chain[i].key, index->phase, index->size, index->offset);
     } else {
-      Index index(d->offset, 0, d->size, 0, d->phase);
+      Index index(d->offset, KEY2TAG(d->chain[i].key), d->size, 0, d->phase);
       if (delete_lookaside(d->chain[i].key, &index)) {
         if (d->chain[i].next.size)  // !empty
           if (verify_offset(this, &d->chain[i].next) >= 0)
             delete_key(d->chain[i].key, d->chain[i].next.phase, d->chain[i].next.size, d->chain[i].next.offset);
-        if (find_key(d->chain[i].key, d->phase, d->size, d->offset))
+        if (find_key(d->chain[i].key, d->phase, d->size, d->offset) < 0)
           insert_key(d->chain[i].key, d->phase, d->size, d->offset);
       }
     }
@@ -1152,6 +1152,7 @@ int Gen::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::SerializeFn
   d->reserved1 = 0;
   d->offset = o;
   ((&d->offset)[1]) = 0;  // clear flags
+  d->remove = 0;          // Initialize remove flag!
   d->phase = b->phase;
   d->nkeys = nkeys;
   memset((void *)d->chain, 0, nkeys * sizeof(KeyChain));
@@ -1164,7 +1165,7 @@ int Gen::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::SerializeFn
   d->length = actual_len;
   d->size = size;
   if (hdb()->chain_collisions) chain_keys_for_write(d);
-  Index index(d->offset, 0, d->size, 0, d->phase);
+  Index index(d->offset, KEY2TAG(*key), d->size, 0, d->phase);
   insert_log(key, nkeys, &index);
   for (int i = 0; i < nkeys; i++) insert_lookaside(key[i], &index);
   b->last = b->cur;
