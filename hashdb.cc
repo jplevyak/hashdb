@@ -33,30 +33,9 @@
 
 void fail(const char *s, ...);
 
-HashDB::HashDB() {
-  init_data_per_index = 16384;
-  reinit_on_open_error = false;
-  write_buffer_size = (1024 * 1024);  // 1MB
-  concurrency = 100;
-  sync_wait_msec = 50;
-  chain_collisions = 0;
-  thread_pool = 0;
-}
+HashDB::HashDB() {}
 
-HDB::HDB() {
-  mutex.lock();
-  // sync_condition initialized by default
-  // sync_thread default constructed (not joinable)
-  thread_pool_allocated = 0;
-  thread_pool_max_threads = std::numeric_limits<int>::max();
-  current_write_slice = 0;
-  exiting = 0;
-  read_only = 0;
-  init_generations = 1;
-  separate_db_per_slice = true;
-  replication_factor = 0;
-  mutex.unlock();
-}
+HDB::HDB() {}
 
 int HDB::err(cchar *format, ...) {
   va_list va;
@@ -135,7 +114,7 @@ int HDB::foreach_slice(void *(*pfn)(Doer *)) {
   static void *do_##_op(Doer *d) { \
     d->res = d->s->_op();          \
     d->latch->count_down();        \
-    return NULL;                   \
+    return nullptr;                \
   }                                \
   static int _op##_slices(HDB *hdb) { return hdb->foreach_slice(do_##_op); }
 
@@ -168,7 +147,7 @@ static void *sync_main(void *data) {
     for (auto s : hdb->slice)
       for (auto g : s->gen) g->periodic_sync();
   }
-  return 0;
+  return nullptr;
 }
 
 int HashDB::open(int aread_only) {
@@ -238,7 +217,7 @@ struct Reader {
 static void *do_read(Reader *r) {
   r->result = r->s->read(r->key, r->hit) | r->result;
   r->latch->count_down();
-  return 0;
+  return nullptr;
 }
 
 static void *do_read_callback(Reader *r) {
@@ -252,7 +231,7 @@ static void *do_read_callback(Reader *r) {
   for (int i = 0; i < r->found; i++) hits.insert(hits.end(), r[i].hit.begin(), r[i].hit.end());
   if (r->callback) r->callback(r->result, hits);
   delete[] r;
-  return 0;
+  return nullptr;
 }
 
 int HashDB::read(uint64_t key, ReadCallback callback, bool immediate_miss) {
@@ -302,7 +281,7 @@ struct Writer {
 static void *do_write(Writer *w) {
   w->result = w->s->write(w->key, w->nkeys, w->value_len, w->serializer, w->mode) | w->result;
   w->barrier->arrive_and_wait();
-  return 0;
+  return nullptr;
 }
 #endif
 
@@ -322,7 +301,7 @@ static void *do_write_callback(Writer *w) {
   w->result = w->s->write(w->key, w->nkeys, w->value_len, w->serializer, w->mode);
   if (w->callback) w->callback(w->result);
   delete[] w;
-  return 0;
+  return nullptr;
 }
 
 int HashDB::write(uint64_t *key, int nkeys, uint64_t value_len, SerializeFn serializer, WriteCallback callback,
@@ -412,7 +391,7 @@ static void *do_remove_callback(Writer *w) {
   w->result = w->s->hdb->remove(w->old_data, nullptr, w->mode);
   if (w->callback) w->callback(w->result);
   delete_aligned(w);
-  return 0;
+  return nullptr;
 }
 
 int HashDB::remove(void *old_data, WriteCallback callback, SyncMode mode) {
@@ -514,15 +493,15 @@ int HashDB::close() {
     s->gen.clear();  // no-race here
     ::close(s->fd);
     if (s->pathname != s->layout_pathname) free(s->pathname);
-    s->pathname = 0;
+    s->pathname = nullptr;
     free(s->layout_pathname);
-    s->layout_pathname = 0;
+    s->layout_pathname = nullptr;
     s->fd = -1;
   }
   hdb->free_slices();
   if (hdb->thread_pool_allocated) {
     delete thread_pool;
-    thread_pool = 0;
+    thread_pool = nullptr;
   }
   hdb->mutex.unlock();
   return res;
