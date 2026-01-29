@@ -524,7 +524,7 @@ void hashdb_print_info(HashDB *dd) {
   HDB *d = (HDB *)dd;
   for (auto slice : d->slice) {
     for (auto g : slice->gen) {
-      printf("Slice %d Gen %d size %llu phase %d\n", slice->islice, g->igen, g->header->size, g->header->phase);
+      printf("Slice %d Gen %d size %lu phase %d\n", slice->islice, g->igen, g->header->size, g->header->phase);
     }
   }
 }
