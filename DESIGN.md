@@ -75,6 +75,25 @@ HashDB is a high-performance, persistent key-value store optimized for concurren
 *   Updates [Lookaside](hashdb_internal.h#166-173) with a "deleted" marker (`next=1`).
 *   Eventually updates [Index](hashdb_internal.h#161-162) to size 0 to reclaim the slot.
 
+## Recovery Process
+
+HashDB employs a two-stage recovery mechanism to ensure data consistency after a crash or unclean shutdown. This process is handled by `Gen::recovery()`.
+
+### 1. Log Recovery (`recover_log`)
+The system first attempts to recover from the [LogHeaderFooter](hashdb_internal.h#185-196) area.
+*   **Scanning**: It reads the committed log area looking for valid `LogHeaderFooter` frames that match the generation's current phase and write serials.
+*   **Replay**: For each valid [LogEntry](hashdb_internal.h#197-204) found, it calls `commit_log_entry()`.
+    *   **Removals**: If the entry indicates a deletion, the key is removed from the persistent [Index](hashdb_internal.h#161-162).
+    *   **Insertions**: New keys are added. This ensures that batch updates tracked in the log are reflected in the index.
+
+### 2. Data Recovery (`recover_data`)
+After log recovery, the system scans the main data area to recover any writes that were appended to the log but not yet indexed or fully committed to the header.
+*   **Scanning**: It scans forward from the last known good `header->write_position`.
+*   **Validation**: Each [Data](hashdb_internal.h#210-226) chunk is validated using `check_data()` (verifying magic bytes, offsets, and consistency).
+*   **Serial Check**: It verifies that the `write_serial` matches the expected sequence.
+*   **Replay**: Valid data chunks are replayed using `commit_data()`, which adds them to the [Index](hashdb_internal.h#161-162) and removes them from the [LookasideCache](hashdb_internal.h#183).
+*   **Termination**: Recovery stops when it encounters invalid data, a mismatch in write serials, or unwritten space, effectively establishing the new valid tail of the log.
+
 ## Concurrency
 *   **Thread Pool**: [HDB](hdb.h#11-36) manages a thread pool for parallel operations across slices.
 *   **Locking**:
