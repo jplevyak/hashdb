@@ -31,6 +31,7 @@ class HDB : public HashDB {
 
   int warn(cchar *format, ...);
   int err(cchar *format, ...);
+  void crash();
   HDB();
 };
 

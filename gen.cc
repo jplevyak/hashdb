@@ -369,7 +369,7 @@ int Gen::recover_data() {
         if (check_data(f, wpos + (b - buf) + len, size_to_length(f->size), f->offset, 1)) goto Lreturn;
         // printf("recovering data %s %d keys at %lld\n",  d->remove ? "remove" : "add", d->nkeys, data_offset + wpos +
         // (b - buf));
-        commit_data(d);
+        commit_data(d, 1);
         wserial++;
       }
       b += len;
@@ -396,6 +396,7 @@ int Gen::load_index() {
   if (recovery() < 0) return -1;
   return 0;
 }
+
 
 int Gen::open() {
   mutex.lock();
@@ -918,15 +919,15 @@ int Gen::check_data(Data *d, uint64_t o, uint64_t l, uint32_t offset, int recove
   return 0;
 }
 
-void Gen::commit_data(Data *d) {
+void Gen::commit_data(Data *d, int recovery) {
   for (uint32_t i = 0; i < d->nkeys; i++) {
     if (d->remove) {
       Index *index = (Index *)DATA_TO_PTR(d);
-      if (delete_lookaside(d->chain[i].key, index))
+      if (recovery || delete_lookaside(d->chain[i].key, index))
         delete_key(d->chain[i].key, index->phase, index->size, index->offset);
     } else {
       Index index(d->offset, KEY2TAG(d->chain[i].key), d->size, 0, d->phase);
-      if (delete_lookaside(d->chain[i].key, &index)) {
+      if (recovery || delete_lookaside(d->chain[i].key, &index)) {
         if (d->chain[i].next.size)  // !empty
           if (verify_offset(this, &d->chain[i].next) >= 0)
             delete_key(d->chain[i].key, d->chain[i].next.phase, d->chain[i].next.size, d->chain[i].next.offset);
@@ -1271,7 +1272,7 @@ void Gen::find_indexes(uint64_t key, std::vector<Index> &rd) {
   uint16_t tag = KEY2TAG(key);
   std::vector<Index> del;
   unsigned int h = ((uint32_t)(key >> 32) ^ ((uint32_t)key));
-  Lookaside *la = &lookaside.v[(h % lookaside.v.size()) * 4];
+  Lookaside *la = &lookaside.v[(h % lookaside.n) * 4];
   for (int a = 0; a < 4; a++) {
     if (key == la[a].key) {
       if (!la[a].index.next)

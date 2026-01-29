@@ -128,7 +128,7 @@ class Gen {
   void clean_sector(int s);
   void clean_index_part(int p);
   void commit_log_entry(LogEntry *d);
-  void commit_data(Data *d);
+  void commit_data(Data *d, int recovery = 0);
   void commit_buffer(uint8_t *start, uint8_t *end);
   int check_data(Data *d, uint64_t o, uint64_t l, uint32_t offset, int recovery = 0);
   void chain_keys_for_write(Data *d);
