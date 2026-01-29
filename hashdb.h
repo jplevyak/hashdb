@@ -52,31 +52,17 @@ class HashDB {
   int write(uint64_t *key, int nkeys, uint64_t value_len, SerializeFn serializer, WriteCallback callback = nullptr,
             SyncMode mode = SyncMode::Async);
   int write(uint64_t *key, int nkeys, const void *data, int len, WriteCallback callback = nullptr,
-            SyncMode mode = SyncMode::Async) {
-    return write(
-        key, nkeys, len,
-        [data, len](std::span<uint8_t> buf) {
-          memcpy(buf.data(), data, len);
-          return len;
-        },
-        callback, mode);
-  }
-  int write(uint64_t key, const void *data, int len, WriteCallback callback = nullptr,
-            SyncMode mode = SyncMode::Async) {
-    return write(&key, 1, data, len, callback, mode);
-  }
+            SyncMode mode = SyncMode::Async);
+  int write(uint64_t key, const void *data, int len, WriteCallback callback = nullptr, SyncMode mode = SyncMode::Async);
+
   // Convenience for just SyncMode without callback
-  int write(uint64_t *key, int nkeys, uint64_t value_len, SerializeFn serializer, SyncMode mode) {
-    return write(key, nkeys, value_len, serializer, nullptr, mode);
-  }
-  int write(uint64_t *key, int nkeys, const void *data, int len, SyncMode mode) {
-    return write(key, nkeys, data, len, nullptr, mode);
-  }
-  int write(uint64_t key, const void *data, int len, SyncMode mode) { return write(key, data, len, nullptr, mode); }
+  int write(uint64_t *key, int nkeys, uint64_t value_len, SerializeFn serializer, SyncMode mode);
+  int write(uint64_t *key, int nkeys, const void *data, int len, SyncMode mode);
+  int write(uint64_t key, const void *data, int len, SyncMode mode);
 
   // Remove mapping for all keys of old_data, a result of HashDB::read
   int remove(void *old_data, WriteCallback callback = nullptr, SyncMode mode = SyncMode::Async);
-  int remove(void *old_data, SyncMode mode) { return remove(old_data, nullptr, mode); }
+  int remove(void *old_data, SyncMode mode);
 
   // Get chained collision match
   int next(uint64_t key, void *old_data, std::vector<Extent> &hit);
