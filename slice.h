@@ -2,6 +2,7 @@
 
 #include "hashdb_internal.h"
 #include "hdb.h"
+#include <memory>
 
 class Slice {
  public:
@@ -17,7 +18,7 @@ class Slice {
   uint32_t is_file : 1;
   uint32_t is_dir : 1;
 
-  std::vector<Gen *> gen;
+  std::vector<std::unique_ptr<Gen>> gen;
 
   int init();
   int open();

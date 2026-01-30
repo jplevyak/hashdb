@@ -38,7 +38,7 @@ std::string random_string(size_t length) {
 
 void test_basic_ops() {
   std::cout << "\n--- TEST: Basic Operations ---" << std::endl;
-  HashDB *db = new_HashDB();
+  auto db = HashDB::create();
   db->slice(".", 100000000);  // 100MB
   db->open();
 
@@ -68,12 +68,11 @@ void test_basic_ops() {
   for (auto &hit : hits) db->free_chunk(hit.data);
 
   db->close();
-  delete db;
 }
 
 void test_large_value() {
   std::cout << "\n--- TEST: Large Value ---" << std::endl;
-  HashDB *db = new_HashDB();
+  auto db = HashDB::create();
   db->slice(".", 100000000);
   db->open();
 
@@ -99,12 +98,11 @@ void test_large_value() {
 
   for (auto &hit : hits) db->free_chunk(hit.data);
   db->close();
-  delete db;
 }
 
 void test_many_keys() {
   std::cout << "\n--- TEST: Many Keys ---" << std::endl;
-  HashDB *db = new_HashDB();
+  auto db = HashDB::create();
   db->slice(".", 100000000);
   db->open();
 
@@ -139,7 +137,6 @@ void test_many_keys() {
   check(found_count == N, "All " + std::to_string(N) + " keys found");
 
   db->close();
-  delete db;
 }
 
 void test_persistence() {
@@ -149,17 +146,19 @@ void test_persistence() {
 
   // 1. Write and Close
   {
-    HashDB *db = new_HashDB();
+    auto db = HashDB::create();
     db->slice(".", 100000000);
     db->open();
     db->write(key, (void *)val.c_str(), val.length() + 1, HashDB::SyncMode::Sync);
     db->close();
-    delete db;
+    // db is unique_ptr, auto deleted
+    // wait, I can just remove delete db.
+    // Actually replacing line 157 with empty.
   }
 
   // 2. Reopen and Read
   {
-    HashDB *db = new_HashDB();
+    auto db = HashDB::create();
     db->slice(".", 100000000);
     db->open();
     std::vector<HashDB::Extent> hits;
@@ -175,13 +174,12 @@ void test_persistence() {
     check(found, "Persistence: Data survived close/open");
     for (auto &hit : hits) db->free_chunk(hit.data);
     db->close();
-    delete db;
   }
 }
 
 void test_async_callbacks() {
   std::cout << "\n--- TEST: Async Callbacks ---" << std::endl;
-  HashDB *db = new_HashDB();
+  auto db = HashDB::create();
   db->slice(".", 100000000);
   db->open();
 
@@ -244,12 +242,12 @@ void test_async_callbacks() {
   check(content_match, "Async Read Content Match");
 
   db->close();
-  delete db;
+  db->close();
 }
 
 void test_remove() {
   std::cout << "\n--- TEST: Remove ---" << std::endl;
-  HashDB *db = new_HashDB();
+  auto db = HashDB::create();
   db->slice(".", 100000000);
   db->open();
 
@@ -303,7 +301,6 @@ void test_remove() {
   check(db->read(key2, hits2) != 0 || hits2.empty(), "Post-remove async read fails");
 
   db->close();
-  delete db;
 }
 
 void test_recovery() {
@@ -315,7 +312,7 @@ void test_recovery() {
 
   // 1. Write and Crash
   {
-    HashDB *db = new_HashDB();
+    auto db = HashDB::create();
     db->slice(".", 100000000);
     db->open();
     
@@ -330,7 +327,8 @@ void test_recovery() {
 
     // Simulate CRASH
     // Cast to HDB* to access crash()
-    ((HDB *)db)->crash();
+    ((HDB *)db.get())->crash();
+    db.release();
     
     // Leak db memory to simulate process death (or just because crash() left it in bad state for delete)
     // Actually, we can just delete it if we accept that it won't be clean.
@@ -342,7 +340,7 @@ void test_recovery() {
 
   // 2. Reopen and Verify
   {
-    HashDB *db = new_HashDB();
+    auto db = HashDB::create();
     db->slice(".", 100000000);
     int res = db->open();
     check(res == 0, "Reopen after crash success");
@@ -361,7 +359,6 @@ void test_recovery() {
     // We mainly check that we can read key1 and DB is open.
 
     db->close();
-    delete db;
   }
 }
 

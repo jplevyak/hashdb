@@ -12,6 +12,7 @@
 
 #include <functional>
 #include <span>
+#include <memory>
 
 #define HASHDB_SLICE_SIZE_MAX ((uint64_t)-1)
 
@@ -80,15 +81,15 @@ class HashDB {
   int concurrency = 100;                     // * of slices
   int sync_wait_msec = 50;
   bool chain_collisions = false;  // for write-only only
-  ThreadPool *thread_pool = nullptr;
+  std::unique_ptr<ThreadPool> thread_pool;
 
   int verify();      // Verify integrity of the database metadata (very expensive).
   int dump_debug();  // dump debug info (DEVELOPER)
+  virtual ~HashDB() = default;
+  static std::unique_ptr<HashDB> create();
  protected:
   HashDB();
 };
-
-HashDB *new_HashDB();
 
 /*
   individual writes must be < 35,184,372,088,832 or 32TB

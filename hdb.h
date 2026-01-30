@@ -10,7 +10,7 @@
 
 class HDB : public HashDB {
  public:
-  std::vector<Slice *> slice;
+  std::vector<std::unique_ptr<Slice>> slice;
   std::mutex mutex;
   std::thread sync_thread;
   std::condition_variable sync_condition;

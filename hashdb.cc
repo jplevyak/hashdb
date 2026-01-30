@@ -58,9 +58,6 @@ int HDB::warn(cchar *format, ...) {
 }
 
 void HDB::free_slices() {
-  for (auto x : slice) {
-    DELETE(x);
-  }
   slice.clear();
 }
 
@@ -70,7 +67,7 @@ struct SafeLatch {
   int count;
   SafeLatch(int n) : count(n) {}
   void count_down() {
-    std::lock_guard<std::mutex> lock(m);
+    std::unique_lock<std::mutex> lock(m);
     if (--count == 0) {
       cv.notify_all();
     }
@@ -100,7 +97,7 @@ int HDB::foreach_slice(void *(*pfn)(Doer *)) {
   std::vector<Doer> doer(slice.size());
   int res = 0;
   for (size_t i = 0; i < slice.size(); i++) {
-    doer[i].init(slice[i], &latch);
+    doer[i].init(slice[i].get(), &latch);
     thread_pool->add_job((void *(*)(void *))pfn, (void *)&doer[i]);
   }
   latch.wait();
@@ -121,15 +118,15 @@ DO_SLICE(open);
 DO_SLICE(verify);
 DO_SLICE(close);
 
-HashDB *new_HashDB() { return new HDB(); }
+std::unique_ptr<HashDB> HashDB::create() { return std::make_unique<HDB>(); }
 
 int HashDB::slice(const char *pathname, uint64_t size, bool init) {
   HDB *hdb = ((HDB *)this);
   hdb->mutex.lock();
-  Slice *s = new Slice(hdb, hdb->slice.size(), pathname, size);
-  for (int i = 0; i < hdb->init_generations; i++) s->gen.push_back(new Gen(s, i));
+  auto s = std::make_unique<Slice>(hdb, hdb->slice.size(), pathname, size);
+  for (int i = 0; i < hdb->init_generations; i++) s->gen.push_back(std::make_unique<Gen>(s.get(), i));
   if (init) s->init();
-  hdb->slice.push_back(s);
+  hdb->slice.push_back(std::move(s));
   hdb->mutex.unlock();
   return 0;
 }
@@ -142,8 +139,8 @@ static void *sync_main(void *data) {
       continue;
     }
     if (hdb->exiting) break;
-    for (auto s : hdb->slice)
-      for (auto g : s->gen) g->periodic_sync();
+    for (const auto &s : hdb->slice)
+      for (const auto &g : s->gen) g->periodic_sync();
   }
   return nullptr;
 }
@@ -156,7 +153,7 @@ int HashDB::open(int aread_only) {
   assert(hdb->replication_factor == 0);
   if (!thread_pool) {
     hdb->thread_pool_max_threads = concurrency * hdb->slice.size();
-    thread_pool = new ThreadPool(hdb->thread_pool_max_threads);
+    thread_pool = std::make_unique<ThreadPool>(hdb->thread_pool_max_threads);
     hdb->thread_pool_allocated = 1;
   } else
     hdb->thread_pool_allocated = 0;
@@ -176,7 +173,7 @@ int HashDB::reinitialize() {
 int HashDB::read(uint64_t key, std::vector<Extent> &hit) {
   HDB *hdb = ((HDB *)this);
   int r = 0;
-  for (auto s : hdb->slice) r = s->read(key, hit) | r;
+  for (const auto &s : hdb->slice) r = s->read(key, hit) | r;
   return 0;
 }
 
@@ -185,9 +182,9 @@ int HashDB::next(uint64_t key, void *old_data, std::vector<Extent> &hit) {
   Data *d = PTR_TO_DATA(old_data);
   if (d->magic != DATA_MAGIC) return -1;
   if ((int)d->slice >= hdb->slice.size()) return -1;
-  Slice *s = hdb->slice[d->slice];
+  Slice *s = hdb->slice[d->slice].get();
   if ((int)d->gen >= s->gen.size()) return -1;
-  Gen *g = s->gen[d->gen];
+  Gen *g = s->gen[d->gen].get();
   int r = 0;
   g->mutex.lock();
   r = g->next(key, d, hit);
@@ -240,7 +237,7 @@ int HashDB::read(uint64_t key, ReadCallback callback, bool immediate_miss) {
   int n = hdb->slice.size(), found = 0;
   std::vector<Reader> reader(n);
   for (int i = 0; i < n; i++) {
-    if (hdb->slice[i]->might_exist(key)) reader[found++].init(hdb->slice[i], key);
+    if (hdb->slice[i]->might_exist(key)) reader[found++].init(hdb->slice[i].get(), key);
   }
   if (immediate_miss && !found) return 1;
   int size = (found ? found : 1);
@@ -249,7 +246,7 @@ int HashDB::read(uint64_t key, ReadCallback callback, bool immediate_miss) {
   
   std::atomic<int> *pending = new std::atomic<int>(size);
   
-  areader[0].s = hdb->slice[0];
+  areader[0].s = hdb->slice[0].get();
   areader[0].found = found;
   areader[0].callback = callback;
   areader[0].result = !found;
@@ -351,7 +348,7 @@ int HashDB::write(uint64_t *key, int nkeys, uint64_t value_len, SerializeFn seri
   Writer *awriter = new Writer[nn];
   std::atomic<int> *pending = new std::atomic<int>(nn);
 
-  awriter[0].s = hdb->slice[s];
+  awriter[0].s = hdb->slice[s].get();
   awriter[0].callback = callback;
   awriter[0].mode = mode;
   awriter[0].key = key;
@@ -416,10 +413,10 @@ int HashDB::remove(void *old_data, WriteCallback callback, SyncMode mode) {
   Data *d = PTR_TO_DATA(old_data);
   if (d->magic != DATA_MAGIC) return -1;
   if ((int)d->slice >= hdb->slice.size()) return -1;
-  Slice *s = hdb->slice[d->slice];
+  Slice *s = hdb->slice[d->slice].get();
   if ((int)d->gen >= s->gen.size()) return -1;
   if (!callback) {
-    Gen *g = s->gen[d->gen];
+    Gen *g = s->gen[d->gen].get();
     int r = 0;
     g->mutex.lock();
     Index dindex(d->offset, 0, d->size, 1, d->phase);
@@ -470,8 +467,8 @@ int HashDB::verify() {
 
 int HashDB::dump_debug() {
   HDB *hdb = ((HDB *)this);
-  for (auto s : hdb->slice) {
-    for (auto g : s->gen) {
+  for (const auto &s : hdb->slice) {
+    for (const auto &g : s->gen) {
       printf("Slice %d Gen %d\n", s->islice, g->igen);
       g->dump_debug_log();
     }
@@ -494,7 +491,7 @@ int HashDB::close() {
 
   int res = close_slices(hdb);
   hdb->mutex.lock();
-  for (auto s : hdb->slice) {
+  for (const auto &s : hdb->slice) {
     s->gen.clear();  // no-race here
     ::close(s->fd);
     if (s->pathname != s->layout_pathname) free(s->pathname);
@@ -505,8 +502,7 @@ int HashDB::close() {
   }
   hdb->free_slices();
   if (hdb->thread_pool_allocated) {
-    delete thread_pool;
-    thread_pool = nullptr;
+    thread_pool.reset();
   }
   hdb->mutex.unlock();
   return res;
@@ -526,7 +522,7 @@ void HDB::crash() {
   // Explicitly do NOT close slices or sync
   // But we might want to close file descriptors to avoid resource leaks in test runner
   hdb->mutex.lock();
-  for (auto s : hdb->slice) {
+  for (const auto &s : hdb->slice) {
     if (s->fd != -1) {
       ::close(s->fd); 
         // Just close FD, no flush
@@ -545,8 +541,7 @@ void HDB::crash() {
   }
   // Clean up thread pool to avoid it running after we destroy/leak
   if (hdb->thread_pool_allocated) {
-      delete thread_pool;
-      thread_pool = nullptr;
+      thread_pool.reset();
   }
   hdb->mutex.unlock();
   // We don't delete HDB itself, test caller should handle object life cycle?
@@ -575,8 +570,8 @@ void hashdb_print_data_header(void *p) {
  */
 void hashdb_print_info(HashDB *dd) {
   HDB *d = (HDB *)dd;
-  for (auto slice : d->slice) {
-    for (auto g : slice->gen) {
+  for (const auto &slice : d->slice) {
+    for (const auto &g : slice->gen) {
       printf("Slice %d Gen %d size %lu phase %d\n", slice->islice, g->igen, g->header->size, g->header->phase);
     }
   }
@@ -594,15 +589,15 @@ void hashdb_index_fullness(HashDB *dd) {
   int fcount[17] = {0};
   int lacount = 0;
   int x = 0;
-  for (auto slice : hdb->slice) {
-    for (auto g : slice->gen) {
+  for (const auto &slice : hdb->slice) {
+    for (const auto &g : slice->gen) {
       for (uint32_t b = 0; b < g->buckets; b++) {
         x = 0;
-        foreach_contiguous_element(g, e, b, tmp) if (g->index(e)->size) x++;
+        foreach_contiguous_element(g.get(), e, b, tmp) if (g->index(e)->size) x++;
         assert(x < 9);
         bcount[x]++;
         x = 0;
-        foreach_overflow_element(g, e, b, tmp) x++;
+        foreach_overflow_element(g.get(), e, b, tmp) x++;
         assert(x < 17);
         ocount[x]++;
       }

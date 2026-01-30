@@ -108,7 +108,7 @@ Slice::Slice(HDB *ahdb, int aislice, const char *alayout_pathname, uint64_t alay
 
 int Slice::init() {
   int res = 0;
-  for (auto g : gen)
+  for (const auto &g : gen)
     if (!res)
       res = g->init();
     else
@@ -118,7 +118,7 @@ int Slice::init() {
 
 int Slice::open() {
   int res = 0;
-  for (auto g : gen)
+  for (const auto &g : gen)
     if (!res)
       res = g->open();
     else
@@ -128,7 +128,7 @@ int Slice::open() {
 
 int Slice::read(uint64_t key, std::vector<HashDB::Extent> &hit) {
   int r = 0;
-  for (auto g : gen) r = g->read(key, hit) | r;
+  for (const auto &g : gen) r = g->read(key, hit) | r;
   return r;
 }
 
@@ -136,7 +136,7 @@ int Slice::might_exist(uint64_t key) {
   int buckets = gen[0]->buckets;
   int b = ((uint32_t)key) % buckets;
   uint16_t tag = KEY2TAG(key);
-  for (auto g : gen) {
+  for (const auto &g : gen) {
     g->mutex.lock();
     unsigned int h = ((uint32_t)(key >> 32) ^ ((uint32_t)key));
     if (g->lookaside.n) {
@@ -150,14 +150,14 @@ int Slice::might_exist(uint64_t key) {
         }
       }
     }
-    foreach_contiguous_element(g, e, b, tmp) {
+    foreach_contiguous_element(g.get(), e, b, tmp) {
       Index *i = g->index(e);
       if (i->tag == tag && i->size) {
         g->mutex.unlock();
         return 1;
       }
     }
-    foreach_overflow_element(g, e, b, tmp) {
+    foreach_overflow_element(g.get(), e, b, tmp) {
       Index *i = g->index(e);
       if (i->tag == tag && i->size) {
         g->mutex.unlock();
@@ -170,7 +170,7 @@ int Slice::might_exist(uint64_t key) {
 }
 
 int Slice::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::SerializeFn serializer, HashDB::SyncMode mode) {
-  Gen *g = gen[0];
+  Gen *g = gen[0].get();
   g->mutex.lock();
   int res = g->write(key, nkeys, value_len, serializer);
   if (!res) {
@@ -216,7 +216,7 @@ int Slice::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::Serialize
 
 int Slice::verify() {
   int res = 0;
-  for (auto g : gen)
+  for (const auto &g : gen)
     if (!res)
       res = g->verify();
     else
@@ -225,9 +225,8 @@ int Slice::verify() {
 }
 
 int Slice::close() {
-  for (auto g : gen) {
+  for (const auto &g : gen) {
     g->close();
-    DELETE(g);
   }
   return 0;
 }
