@@ -14,6 +14,7 @@
 #include <functional>
 #include <stdexcept>
 #include <type_traits>
+#include <tuple>
 
 class ThreadPool;
 
@@ -91,8 +92,10 @@ template <class F, class... Args>
 auto ThreadPool::enqueue(F &&f, Args &&...args) -> std::future<std::invoke_result_t<F, Args...>> {
   using return_type = std::invoke_result_t<F, Args...>;
 
-  auto task =
-      std::make_shared<std::packaged_task<return_type()>>(std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+  auto task = std::make_shared<std::packaged_task<return_type()>>(
+      [func = std::forward<F>(f), args = std::make_tuple(std::forward<Args>(args)...)]() mutable {
+        return std::apply(std::move(func), std::move(args));
+      });
 
   std::future<return_type> res = task->get_future();
   {
@@ -108,7 +111,7 @@ auto ThreadPool::enqueue(F &&f, Args &&...args) -> std::future<std::invoke_resul
 }
 
 inline void ThreadPool::add_job(void *(*pfn)(void *), void *arg) {
-  enqueue((std::function<void *()>)std::bind(pfn, arg));
+  enqueue(pfn, arg);
 }
 
 inline std::thread ThreadPool::thread_create(void *(*pfn)(void *), void *arg) { return std::thread(pfn, arg); }
