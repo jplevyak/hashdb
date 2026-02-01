@@ -15,7 +15,6 @@ class HDB : public HashDB {
   std::thread sync_thread_;
   std::condition_variable sync_condition_;
   int exiting_{0};
-  int read_only_{0};
 
   int foreach_slice(void *(*pfn)(Doer *));
   void free_slices();

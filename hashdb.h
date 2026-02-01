@@ -38,7 +38,9 @@ class HashDB {
   int slice(const char *pathname, uint64_t size = HASHDB_SLICE_SIZE_MAX, bool init = false);
 
   int reinitialize();           // Reinitialize all slices (clear data).
-  int open(int read_only = 0);  // Open all slices.
+  static const int HDB_READ_ONLY = 0x01;
+  static const int HDB_CHECK_HASH = 0x02;
+  int open(int options = 0);  // Open all slices.
 
   // Read the set of chunks associated with the given key.
   // Returned chunks are free'd with free_chunk().
@@ -81,6 +83,8 @@ class HashDB {
   int concurrency_ = 100;                     // * of slices
   int sync_wait_msec_ = 50;
   bool chain_collisions_ = false;  // for write-only only
+  bool check_hash_ = false;       // Verify blake3 hash on read
+  bool read_only_ = false;        // Read only mode
   std::unique_ptr<ThreadPool> thread_pool_;
 
   int verify();      // Verify integrity of the database metadata (very expensive).

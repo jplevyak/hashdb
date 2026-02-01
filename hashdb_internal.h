@@ -17,7 +17,7 @@
 #define LOG_MAGIC 0xA987FE543210FEEFull
 #define BAD_DATA ((void *)(uintptr_t)-1)
 #define HDB_MAJOR_VERSION 0
-#define HDB_MINOR_VERSION 0
+#define HDB_MINOR_VERSION 1
 #define SIZE_4K 4096
 #define SIZE_8K 8192
 #define SAFE_SECTOR_SIZE SIZE_4K  // prepare for 4k native physical sector size
@@ -224,6 +224,7 @@ struct Data {
   uint32_t padding : 1;     // write_serial does not increment
   uint32_t reserved2 : 18;  // do not move these relative to each other
   uint32_t nkeys;
+  uint8_t hash[32];
   KeyChain chain[1];
 };
 

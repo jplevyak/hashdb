@@ -40,7 +40,7 @@ void test_basic_ops() {
   std::cout << "\n--- TEST: Basic Operations ---" << std::endl;
   auto db = HashDB::create();
   db->slice(".", 100000000);  // 100MB
-  db->open();
+  db->open(HashDB::HDB_CHECK_HASH);
 
   uint64_t key = 0x1111111111111111ul;
   std::string data = "Hello, HashDB!";

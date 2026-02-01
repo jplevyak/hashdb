@@ -60,7 +60,6 @@ Gen::Gen(Slice *aslice, int aigen) {
 
 inline ssize_t Gen::pwrite(int fd, const void *buf, size_t count, off_t offset) {
   if (!hdb()->read_only_) {
-    // printf("pwrite %lld %lld\n", (long long int)count, (long long int)offset);
     return ::pwrite(fd, buf, count, offset);
   } else
     return count;
@@ -630,6 +629,7 @@ static void append_footer(WriteBuffer *b) {
   ((&d->offset)[1]) = 0;  // clear flags
   d->padding = 1;
   d->nkeys = 0;
+  memset(d->hash, 0, 32);
   d->length = FOOTER_SIZE - sizeof(Data) - sizeof(DataFooter);
   d->size = 1;
   b->cur_ += FOOTER_SIZE;
@@ -1176,6 +1176,15 @@ int Gen::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::SerializeFn
   if (l != actual_len + hsize) memset(target + actual_len, 0, l - (actual_len + hsize));
   d->length = actual_len;
   d->size = size;
+
+  // Calculate Hash
+  blake3_hasher hasher;
+  blake3_hasher_init(&hasher);
+  blake3_hasher_update(&hasher, d, (uint8_t*)d->hash - (uint8_t*)d);
+  // Hash from chain start to end of block
+  blake3_hasher_update(&hasher, d->chain, (uint8_t*)d + l - (uint8_t*)d->chain);
+  blake3_hasher_finalize(&hasher, d->hash, BLAKE3_OUT_LEN);
+
   if (hdb()->chain_collisions_) chain_keys_for_write(d);
   Index index(d->offset, KEY2TAG(*key), d->size, 0, d->phase);
   insert_log(key, nkeys, &index);
@@ -1220,6 +1229,14 @@ int Gen::write_remove(uint64_t *key, int nkeys, Index *i) {
   if (l != hsize + sizeof(Index)) memset(target, 0, l - hsize - sizeof(Index));
   d->length = sizeof(Index);
   d->size = size;
+
+  // Calculate Hash
+  blake3_hasher hasher;
+  blake3_hasher_init(&hasher);
+  blake3_hasher_update(&hasher, d, (uint8_t*)d->hash - (uint8_t*)d);
+  blake3_hasher_update(&hasher, d->chain, (uint8_t*)d + l - (uint8_t*)d->chain);
+  blake3_hasher_finalize(&hasher, d->hash, BLAKE3_OUT_LEN);
+
   b->last_ = b->cur_;
   b->cur_ += l;
   return 0;
@@ -1269,10 +1286,28 @@ Lfound: {
   Data *d = (Data *)buf;
   if (d->remove) goto Lreturn;
   if (check_data(d, o, l, i->offset)) goto Lreturn;
+
+  // Verify Hash
+  if (hdb()->check_hash_) {
+    blake3_hasher hasher;
+    uint8_t hash[32];
+    blake3_hasher_init(&hasher);
+    blake3_hasher_update(&hasher, d, (uint8_t*)d->hash - (uint8_t*)d);
+    blake3_hasher_update(&hasher, d->chain, (uint8_t*)d + l - (uint8_t*)d->chain);
+    blake3_hasher_finalize(&hasher, hash, BLAKE3_OUT_LEN);
+    if (memcmp(hash, d->hash, 32) != 0) {
+      hdb()->err("hash mismatch reading data at offset %llu slice %d gen %d", o, slice_->islice_, igen_);
+      goto Lreturn_error;
+    }
+  }
+
   if (!SLICE_INDEX_MISMATCH_RESULT)  // fixup slice number
     d->slice = slice_->islice_;
   return d;
 }
+Lreturn_error:
+  delete_aligned(buf);
+  return (Data *)BAD_DATA;
 Lreturn:
   delete_aligned(buf);
   return 0;
