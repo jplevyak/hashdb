@@ -362,6 +362,65 @@ void test_recovery() {
   }
 }
 
+void test_concurrency() {
+  std::cout << "\n--- TEST: Concurrency ---" << std::endl;
+  auto db = HashDB::create();
+  db->slice(".", 100000000);
+  db->open();
+
+  constexpr int NUM_WRITERS = 10;
+  constexpr int KEYS_PER_WRITER = 500;
+  constexpr int NUM_READERS = 10;
+  constexpr int READ_OPS = 1000;
+
+  auto writer_func = [&](int id) {
+    uint64_t base = id * KEYS_PER_WRITER + 0xA000000000000000ul;
+    for (int i = 0; i < KEYS_PER_WRITER; ++i) {
+      uint64_t key = base + i;
+      std::string val = "Val_" + std::to_string(key);
+      db->write(key, (void *)val.c_str(), val.length() + 1, HashDB::SyncMode::Async);
+      if (i % 100 == 0) usleep(100); 
+    }
+  };
+
+  auto reader_func = [&](int id) {
+     std::mt19937 rng(id + 1000);
+     std::uniform_int_distribution<uint64_t> dist_writer(0, NUM_WRITERS - 1);
+     std::uniform_int_distribution<uint64_t> dist_key(0, KEYS_PER_WRITER - 1);
+
+     for(int i=0; i<READ_OPS; ++i) {
+         int w_id = dist_writer(rng);
+         int k_idx = dist_key(rng);
+         uint64_t key = w_id * KEYS_PER_WRITER + 0xA000000000000000ul + k_idx;
+         std::vector<HashDB::Extent> hits;
+         db->read(key, hits);
+         for(auto& h : hits) {
+             if (h.data) {
+                 std::string expected = "Val_" + std::to_string(key);
+                  if (strcmp((char*)h.data, expected.c_str()) != 0) {
+                      std::cerr << "FAIL: Content mismatch " << (char*)h.data << " vs " << expected << std::endl;
+                      exit(1);
+                  }
+             }
+             db->free_chunk(h.data);
+         }
+         if (i % 100 == 0) usleep(100);
+     }
+  };
+
+  std::vector<std::thread> threads;
+  for(int i=0; i<NUM_WRITERS; ++i) threads.emplace_back(writer_func, i);
+  for(int i=0; i<NUM_READERS; ++i) threads.emplace_back(reader_func, i);
+
+  for(auto& t : threads) t.join();
+
+  // Sync to ensure everything is flushed clean
+  db->write(0xFFFFFFFFFFFFFFFFul, (void *)"sync", 5, HashDB::SyncMode::Sync);
+
+  std::cout << "PASS: Concurrency test finished" << std::endl;
+  db->close();
+}
+
 int main() {
   // Clean start
   unlink("hashdb.data");
@@ -373,6 +432,7 @@ int main() {
   test_persistence();
   test_async_callbacks();
   test_remove();
+  test_concurrency();
   test_recovery();
 
   std::cout << "\nSIU: ALL TESTS PASSED" << std::endl;
