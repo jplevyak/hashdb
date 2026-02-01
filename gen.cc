@@ -580,10 +580,9 @@ void Gen::free() {
 }
 
 int Gen::close() {
-  mutex_.lock();
+  std::lock_guard<std::mutex> lock(mutex_);
   int res = save();
   free();
-  mutex_.unlock();
   return res;
 }
 
@@ -599,12 +598,11 @@ void Gen::complete_index_sync() {
 }
 
 void Gen::periodic_sync() {
-  mutex_.lock();
+  std::lock_guard<std::mutex> lock(mutex_);
   WriteBuffer &w = wbuf_[cur_write_];
   if (w.start_ != w.cur_ && !w.writing_) write_buffer();
   write_upto_index_part(sync_part_ + 1, 1);  // write one more
   if (sync_part_ >= index_parts_) complete_index_sync();
-  mutex_.unlock();
 }
 
 static void append_footer(WriteBuffer *b) {
@@ -1304,11 +1302,12 @@ void Gen::find_indexes(uint64_t key, std::vector<Index> &rd) {
 int Gen::read(uint64_t key, std::vector<HashDB::Extent> &hit) {
   int r = 0;
   std::vector<Index> rd;
-  mutex_.lock();
-  find_indexes(key, rd);
-  if (!rd.size()) r = 2;
-  for (size_t x = 0; x < rd.size(); x++) r = read_element(&rd[x], key, hit) | r;
-  mutex_.unlock();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    find_indexes(key, rd);
+    if (!rd.size()) r = 2;
+    for (size_t x = 0; x < rd.size(); x++) r = read_element(&rd[x], key, hit) | r;
+  }
   return r;
 }
 
@@ -1316,9 +1315,8 @@ int Gen::next(uint64_t key, Data *d, std::vector<HashDB::Extent> &hit) {
   int r = 0;
   for (uint32_t i = 0; i < d->nkeys; i++) {
     if (d->chain[i].key == key && d->chain[i].next.size) {
-      mutex_.lock();
+      std::lock_guard<std::mutex> lock(mutex_);
       r = read_element(&d->chain[i].next, key, hit) | r;
-      mutex_.unlock();
       return r;
     }
   }

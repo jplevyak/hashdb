@@ -137,14 +137,13 @@ int Slice::might_exist(uint64_t key) {
   int b = ((uint32_t)key) % buckets;
   uint16_t tag = KEY2TAG(key);
   for (const auto &g : gen_) {
-    g->mutex_.lock();
+    std::lock_guard<std::mutex> lock(g->mutex_);
     unsigned int h = ((uint32_t)(key >> 32) ^ ((uint32_t)key));
     if (g->lookaside_.n_) {
       Lookaside *la = &g->lookaside_.v_[(h % g->lookaside_.n_) * 4];
       for (int a = 0; a < 4; a++) {
         if (key == la[a].key) {
           if (!la[a].index.next) {
-            g->mutex_.unlock();
             return 1;
           }
         }
@@ -153,25 +152,22 @@ int Slice::might_exist(uint64_t key) {
     foreach_contiguous_element(g.get(), e, b, tmp) {
       Index *i = g->index(e);
       if (i->tag == tag && i->size) {
-        g->mutex_.unlock();
         return 1;
       }
     }
     foreach_overflow_element(g.get(), e, b, tmp) {
       Index *i = g->index(e);
       if (i->tag == tag && i->size) {
-        g->mutex_.unlock();
         return 1;
       }
     }
-    g->mutex_.unlock();
   }
   return 0;
 }
 
 int Slice::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::SerializeFn serializer, HashDB::SyncMode mode) {
   Gen *g = gen_[0].get();
-  g->mutex_.lock();
+  std::unique_lock<std::mutex> lock(g->mutex_);
   int res = g->write(key, nkeys, value_len, serializer);
   if (!res) {
     if (mode == HashDB::SyncMode::Sync || mode == HashDB::SyncMode::Flush) {
@@ -180,9 +176,7 @@ int Slice::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::Serialize
         g->write_buffer();
         // wait_for_write_to_complete(b); // TODO: need to make this visible or reimplement?
         // Wait for write to complete logic
-        std::unique_lock<std::mutex> lock(b->gen_->mutex_, std::adopt_lock);
         while (b->writing_) b->gen_->write_condition_.wait(lock);
-        lock.release();
       } else {
         // wait_for_flush(b, hdb->sync_wait_msec);
         // Wait for flush logic
@@ -195,22 +189,17 @@ int Slice::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::Serialize
         while (std::chrono::high_resolution_clock::now() < donet && b->next_offset_ == o && b->start_ != b->cur_) {
           // pthread_cond_timedwait expects mutex locked.
           // b->gen->mutex is g->mutex which IS locked.
-          std::unique_lock<std::mutex> lock(g->mutex_, std::adopt_lock);
           auto now = std::chrono::high_resolution_clock::now();
           auto remaining = donet - now;
           if (remaining.count() > 0) g->write_condition_.wait_for(lock, remaining);
-          lock.release();  // release ownership
         }
         if (b->next_offset_ == o && b->start_ != b->cur_) {
           if (!b->writing_) g->write_buffer();
-          std::unique_lock<std::mutex> lock(b->gen_->mutex_, std::adopt_lock);
           while (b->writing_) b->gen_->write_condition_.wait(lock);
-          lock.release();
         }
       }
     }
   }
-  g->mutex_.unlock();
   return res;
 }
 

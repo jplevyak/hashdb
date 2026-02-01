@@ -129,12 +129,13 @@ std::unique_ptr<HashDB> HashDB::create() { return std::make_unique<HDB>(); }
 
 int HashDB::slice(const char *pathname, uint64_t size, bool init) {
   HDB *hdb = ((HDB *)this);
-  hdb->mutex_.lock();
-  auto s = std::make_unique<Slice>(hdb, hdb->slice_.size(), pathname, size);
-  for (int i = 0; i < hdb->init_generations_; i++) s->gen_.push_back(std::make_unique<Gen>(s.get(), i));
-  if (init) s->init();
-  hdb->slice_.push_back(std::move(s));
-  hdb->mutex_.unlock();
+  {
+    std::lock_guard<std::mutex> lock(hdb->mutex_);
+    auto s = std::make_unique<Slice>(hdb, hdb->slice_.size(), pathname, size);
+    for (int i = 0; i < hdb->init_generations_; i++) s->gen_.push_back(std::make_unique<Gen>(s.get(), i));
+    if (init) s->init();
+    hdb->slice_.push_back(std::move(s));
+  }
   return 0;
 }
 
@@ -193,9 +194,10 @@ int HashDB::next(uint64_t key, void *old_data, std::vector<Extent> &hit) {
   if ((int)d->gen >= s->gen_.size()) return -1;
   Gen *g = s->gen_[d->gen].get();
   int r = 0;
-  g->mutex_.lock();
-  r = g->next(key, d, hit);
-  g->mutex_.unlock();
+  {
+    std::lock_guard<std::mutex> lock(g->mutex_);
+    r = g->next(key, d, hit);
+  }
   return r;
 }
 
@@ -424,23 +426,24 @@ int HashDB::remove(void *old_data, WriteCallback callback, SyncMode mode) {
   if (!callback) {
     Gen *g = s->gen_[d->gen].get();
     int r = 0;
-    g->mutex_.lock();
-    Index dindex(d->offset, 0, d->size, 1, d->phase);
-    Index iindex(d->offset, 0, d->size, 0, d->phase);
-    std::vector<uint64_t> keys(d->nkeys);
-    for (uint32_t j = 0; j < d->nkeys; j++) keys[j] = d->chain[j].key;
-    r = g->write_remove(keys.data(), d->nkeys, &dindex) | r;
-    for (int i = 0; i < (int)d->nkeys; i++)
-      if (!g->delete_lookaside(keys[i], &iindex)) g->insert_lookaside(keys[i], &dindex);
-    g->insert_log(keys.data(), d->nkeys, &dindex);
-    if (mode == SyncMode::Sync || mode == SyncMode::Flush) {
-      if (mode == SyncMode::Flush) {
-        wait_for_write_commit(g, g->header_->write_position, g->header_->phase);
-        if (g->lbuf_[g->cur_log_].start_ != g->lbuf_[g->cur_log_].cur_) g->write_log_buffer();
-      } else
-        wait_for_log_flush(g, hdb->sync_wait_msec_);
+    {
+      std::lock_guard<std::mutex> lock(g->mutex_);
+      Index dindex(d->offset, 0, d->size, 1, d->phase);
+      Index iindex(d->offset, 0, d->size, 0, d->phase);
+      std::vector<uint64_t> keys(d->nkeys);
+      for (uint32_t j = 0; j < d->nkeys; j++) keys[j] = d->chain[j].key;
+      r = g->write_remove(keys.data(), d->nkeys, &dindex) | r;
+      for (int i = 0; i < (int)d->nkeys; i++)
+        if (!g->delete_lookaside(keys[i], &iindex)) g->insert_lookaside(keys[i], &dindex);
+      g->insert_log(keys.data(), d->nkeys, &dindex);
+      if (mode == SyncMode::Sync || mode == SyncMode::Flush) {
+        if (mode == SyncMode::Flush) {
+          wait_for_write_commit(g, g->header_->write_position, g->header_->phase);
+          if (g->lbuf_[g->cur_log_].start_ != g->lbuf_[g->cur_log_].cur_) g->write_log_buffer();
+        } else
+          wait_for_log_flush(g, hdb->sync_wait_msec_);
+      }
     }
-    g->mutex_.unlock();
     return r;
   }
   int nn = 1;
