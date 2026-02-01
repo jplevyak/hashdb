@@ -80,17 +80,17 @@ struct LogEntry;
 template <class K, class HF>
 class NBlockHash {
  public:
-  std::vector<K> v;
-  uint32_t n;
+  std::vector<K> v_;
+  uint32_t n_;
   void resize(uint32_t N) {
-    n = N;
-    v.resize(n * 4);
+    n_ = N;
+    v_.resize(n_ * 4);
   }
-  void clear() { v.clear(); }
+  void clear() { v_.clear(); }
   int count() { return 0; }
   void put(K l) {
     uint32_t h = HF::hash(l);
-    K *p = &v[(h % n) * 4];
+    K *p = &v_[(h % n_) * 4];
     for (int i = 0; i < 4; i++) {
       if (!p[i]) {
         p[i] = l;
@@ -100,7 +100,7 @@ class NBlockHash {
   }
   int del(K l) {
     uint32_t h = HF::hash(l);
-    K *p = &v[(h % n) * 4];
+    K *p = &v_[(h % n_) * 4];
     for (int i = 0; i < 4; i++) {
       if (HF::equal(p[i], l)) {
         p[i] = K(0);

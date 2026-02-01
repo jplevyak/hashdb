@@ -6,19 +6,19 @@
 
 class Slice {
  public:
-  HDB *hdb;
-  int islice;
-  int fd;
-  char *pathname;
-  char *layout_pathname;
-  uint64_t layout_size;
-  uint64_t size;
-  uint32_t block_size;
-  uint32_t is_raw : 1;
-  uint32_t is_file : 1;
-  uint32_t is_dir : 1;
+  HDB *hdb_;
+  int islice_;
+  int fd_;
+  char *pathname_;
+  char *layout_pathname_;
+  uint64_t layout_size_;
+  uint64_t size_;
+  uint32_t block_size_;
+  uint32_t is_raw_ : 1;
+  uint32_t is_file_ : 1;
+  uint32_t is_dir_ : 1;
 
-  std::vector<std::unique_ptr<Gen>> gen;
+  std::vector<std::unique_ptr<Gen>> gen_;
 
   int init();
   int open();

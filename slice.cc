@@ -31,64 +31,64 @@ void fail(const char *s, ...);
 Slice::Slice(HDB *ahdb, int aislice, const char *alayout_pathname, uint64_t alayout_size) {
   struct stat stat_buf;
 
-  hdb = ahdb;
-  islice = aislice;
-  fd = ::open(alayout_pathname, O_RDONLY);
-  layout_pathname = strdup(alayout_pathname);
-  layout_size = alayout_size;
-  size = 0;
-  is_raw = is_file = is_dir = 0;
+  hdb_ = ahdb;
+  islice_ = aislice;
+  fd_ = ::open(alayout_pathname, O_RDONLY);
+  layout_pathname_ = strdup(alayout_pathname);
+  layout_size_ = alayout_size;
+  size_ = 0;
+  is_raw_ = is_file_ = is_dir_ = 0;
 
-  if (stat(layout_pathname, &stat_buf)) fail("unable to stat '%s'", layout_pathname);
+  if (stat(layout_pathname_, &stat_buf)) fail("unable to stat '%s'", layout_pathname_);
   switch (stat_buf.st_mode & S_IFMT) {
     case S_IFBLK:
     case S_IFCHR:
-      is_raw = 1;
+      is_raw_ = 1;
       break;
     case S_IFDIR:
-      is_dir = 1;
+      is_dir_ = 1;
       break;
     case S_IFREG:
-      is_file = 1;
+      is_file_ = 1;
       break;
     default:
-      fail("unknown stat result '%s'", pathname);
+      fail("unknown stat result '%s'", pathname_);
   }
-  if (is_file)
-    pathname = layout_pathname;
-  else if (is_dir) {
+  if (is_file_)
+    pathname_ = layout_pathname_;
+  else if (is_dir_) {
     char p[1024];
-    strcpy(p, layout_pathname);
+    strcpy(p, layout_pathname_);
     strcat(p, "/hashdb.data");
-    pathname = strdup(p);
+    pathname_ = strdup(p);
   } else {
 #ifndef linux
     fail("raw devices not supported");
 #else
-    if (::ioctl(fd, BLKGETSIZE64, &size)) fail("unable to get raw device size");
-    pathname = layout_pathname;
+    if (::ioctl(fd_, BLKGETSIZE64, &size_)) fail("unable to get raw device size");
+    pathname_ = layout_pathname_;
 #endif
   }
-  ::close(fd);
+  ::close(fd_);
 #ifndef O_DIRECT
 #define O_DIRECT 0
 #endif
-  if ((fd = ::open(pathname, O_CREAT | O_RDWR | O_DIRECT, S_IRUSR | S_IWUSR)) < 0)
-    fail("unable to open '%s'", pathname);
-  if (::fstat(fd, &stat_buf)) fail("unable to stat '%s'", pathname);
-  block_size = SAFE_SECTOR_SIZE;
-  if (!is_raw) {
-    if ((stat_buf.st_mode & S_IFMT) != S_IFREG) fail("bad file type '%s'", pathname);
-    size = stat_buf.st_size;
+  if ((fd_ = ::open(pathname_, O_CREAT | O_RDWR | O_DIRECT, S_IRUSR | S_IWUSR)) < 0)
+    fail("unable to open '%s'", pathname_);
+  if (::fstat(fd_, &stat_buf)) fail("unable to stat '%s'", pathname_);
+  block_size_ = SAFE_SECTOR_SIZE;
+  if (!is_raw_) {
+    if ((stat_buf.st_mode & S_IFMT) != S_IFREG) fail("bad file type '%s'", pathname_);
+    size_ = stat_buf.st_size;
   } else {
 #ifdef linux
-    if (::ioctl(fd, BLKSSZGET, &block_size)) fail("unable to get block size '%s'", pathname);
+    if (::ioctl(fd_, BLKSSZGET, &block_size_)) fail("unable to get block size '%s'", pathname_);
     uint16_t id[256];
     bool write_cache_disabled = 0;
-    if (!::ioctl(fd, HDIO_GET_IDENTITY, id))
+    if (!::ioctl(fd_, HDIO_GET_IDENTITY, id))
       if (id[82] & 0x20) write_cache_disabled = id[85] & 0x20 ? false : true;
     if (!write_cache_disabled) {
-      if (::ioctl(fd, HDIO_SET_WCACHE, 0)) {
+      if (::ioctl(fd_, HDIO_SET_WCACHE, 0)) {
         // uint8_t setcache[4] = {0xef, 0, 0x82, 0};
         // if (do_drive_cmd(fd, setcache))
         //   hdb->warn("unable to disable write cache, data loss possible on power loss '%s': %s", pathname,
@@ -97,18 +97,18 @@ Slice::Slice(HDB *ahdb, int aislice, const char *alayout_pathname, uint64_t alay
     }
 #endif
   }
-  if (layout_size && size != layout_size) {
-    if (is_file || is_dir) {
-      if (ftruncate(fd, layout_size) < 0) fail("unable to truncate '%s'", pathname);
+  if (layout_size_ && size_ != layout_size_) {
+    if (is_file_ || is_dir_) {
+      if (ftruncate(fd_, layout_size_) < 0) fail("unable to truncate '%s'", pathname_);
     }
-    size = layout_size;
+    size_ = layout_size_;
   }
-  size = ROUND_DOWN_SAFE_SECTOR_SIZE(size);
+  size_ = ROUND_DOWN_SAFE_SECTOR_SIZE(size_);
 }
 
 int Slice::init() {
   int res = 0;
-  for (const auto &g : gen)
+  for (const auto &g : gen_)
     if (!res)
       res = g->init();
     else
@@ -118,7 +118,7 @@ int Slice::init() {
 
 int Slice::open() {
   int res = 0;
-  for (const auto &g : gen)
+  for (const auto &g : gen_)
     if (!res)
       res = g->open();
     else
@@ -128,23 +128,23 @@ int Slice::open() {
 
 int Slice::read(uint64_t key, std::vector<HashDB::Extent> &hit) {
   int r = 0;
-  for (const auto &g : gen) r = g->read(key, hit) | r;
+  for (const auto &g : gen_) r = g->read(key, hit) | r;
   return r;
 }
 
 int Slice::might_exist(uint64_t key) {
-  int buckets = gen[0]->buckets;
+  int buckets = gen_[0]->buckets_;
   int b = ((uint32_t)key) % buckets;
   uint16_t tag = KEY2TAG(key);
-  for (const auto &g : gen) {
-    g->mutex.lock();
+  for (const auto &g : gen_) {
+    g->mutex_.lock();
     unsigned int h = ((uint32_t)(key >> 32) ^ ((uint32_t)key));
-    if (g->lookaside.n) {
-      Lookaside *la = &g->lookaside.v[(h % g->lookaside.n) * 4];
+    if (g->lookaside_.n_) {
+      Lookaside *la = &g->lookaside_.v_[(h % g->lookaside_.n_) * 4];
       for (int a = 0; a < 4; a++) {
         if (key == la[a].key) {
           if (!la[a].index.next) {
-            g->mutex.unlock();
+            g->mutex_.unlock();
             return 1;
           }
         }
@@ -153,70 +153,70 @@ int Slice::might_exist(uint64_t key) {
     foreach_contiguous_element(g.get(), e, b, tmp) {
       Index *i = g->index(e);
       if (i->tag == tag && i->size) {
-        g->mutex.unlock();
+        g->mutex_.unlock();
         return 1;
       }
     }
     foreach_overflow_element(g.get(), e, b, tmp) {
       Index *i = g->index(e);
       if (i->tag == tag && i->size) {
-        g->mutex.unlock();
+        g->mutex_.unlock();
         return 1;
       }
     }
-    g->mutex.unlock();
+    g->mutex_.unlock();
   }
   return 0;
 }
 
 int Slice::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::SerializeFn serializer, HashDB::SyncMode mode) {
-  Gen *g = gen[0].get();
-  g->mutex.lock();
+  Gen *g = gen_[0].get();
+  g->mutex_.lock();
   int res = g->write(key, nkeys, value_len, serializer);
   if (!res) {
     if (mode == HashDB::SyncMode::Sync || mode == HashDB::SyncMode::Flush) {
-      WriteBuffer *b = &g->wbuf[g->cur_write];
+      WriteBuffer *b = &g->wbuf_[g->cur_write_];
       if (mode == HashDB::SyncMode::Flush) {
         g->write_buffer();
         // wait_for_write_to_complete(b); // TODO: need to make this visible or reimplement?
         // Wait for write to complete logic
-        std::unique_lock<std::mutex> lock(b->gen->mutex, std::adopt_lock);
-        while (b->writing) b->gen->write_condition.wait(lock);
+        std::unique_lock<std::mutex> lock(b->gen_->mutex_, std::adopt_lock);
+        while (b->writing_) b->gen_->write_condition_.wait(lock);
         lock.release();
       } else {
         // wait_for_flush(b, hdb->sync_wait_msec);
         // Wait for flush logic
-        int wait_msec = hdb->sync_wait_msec;
-        uint64_t o = b->next_offset;
+        int wait_msec = hdb_->sync_wait_msec_;
+        uint64_t o = b->next_offset_;
         // Gen *g = b->gen; // Already have g
         auto startt = std::chrono::high_resolution_clock::now();
         auto donet = startt + std::chrono::milliseconds(wait_msec);
         // Note: we need to handle the lock carefully here for timedwait
-        while (std::chrono::high_resolution_clock::now() < donet && b->next_offset == o && b->start != b->cur) {
+        while (std::chrono::high_resolution_clock::now() < donet && b->next_offset_ == o && b->start_ != b->cur_) {
           // pthread_cond_timedwait expects mutex locked.
           // b->gen->mutex is g->mutex which IS locked.
-          std::unique_lock<std::mutex> lock(g->mutex, std::adopt_lock);
+          std::unique_lock<std::mutex> lock(g->mutex_, std::adopt_lock);
           auto now = std::chrono::high_resolution_clock::now();
           auto remaining = donet - now;
-          if (remaining.count() > 0) g->write_condition.wait_for(lock, remaining);
+          if (remaining.count() > 0) g->write_condition_.wait_for(lock, remaining);
           lock.release();  // release ownership
         }
-        if (b->next_offset == o && b->start != b->cur) {
-          if (!b->writing) g->write_buffer();
-          std::unique_lock<std::mutex> lock(b->gen->mutex, std::adopt_lock);
-          while (b->writing) b->gen->write_condition.wait(lock);
+        if (b->next_offset_ == o && b->start_ != b->cur_) {
+          if (!b->writing_) g->write_buffer();
+          std::unique_lock<std::mutex> lock(b->gen_->mutex_, std::adopt_lock);
+          while (b->writing_) b->gen_->write_condition_.wait(lock);
           lock.release();
         }
       }
     }
   }
-  g->mutex.unlock();
+  g->mutex_.unlock();
   return res;
 }
 
 int Slice::verify() {
   int res = 0;
-  for (const auto &g : gen)
+  for (const auto &g : gen_)
     if (!res)
       res = g->verify();
     else
@@ -225,7 +225,7 @@ int Slice::verify() {
 }
 
 int Slice::close() {
-  for (const auto &g : gen) {
+  for (const auto &g : gen_) {
     g->close();
   }
   return 0;

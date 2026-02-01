@@ -19,12 +19,12 @@ class ThreadPool;
 
 class Worker {
  public:
-  Worker(ThreadPool &s) : pool(s) {}
+  Worker(ThreadPool &s) : pool_(s) {}
 
   void operator()();
 
  private:
-  ThreadPool &pool;
+  ThreadPool &pool_;
 };
 
 class ThreadPool {
@@ -44,7 +44,7 @@ class ThreadPool {
   friend class Worker;
 
   // need to keep track of threads so we can join them
-  std::vector<std::thread> workers;
+  std::vector<std::thread> workers_;
 
   typedef std::pair<int, std::function<void()>> priority_task;
 
@@ -54,25 +54,25 @@ class ThreadPool {
   };
 
   // the prioritized task queue
-  std::priority_queue<priority_task, std::vector<priority_task>, task_comp> tasks;
+  std::priority_queue<priority_task, std::vector<priority_task>, task_comp> tasks_;
 
   // synchronization
-  std::mutex queue_mutex;
-  std::condition_variable condition;
-  bool stop;
+  std::mutex queue_mutex_;
+  std::condition_variable condition_;
+  bool stop_;
 };
 
 inline void Worker::operator()() {
   std::function<void()> task;
   while (true) {
-    std::unique_lock<std::mutex> lock(pool.queue_mutex);
+    std::unique_lock<std::mutex> lock(pool_.queue_mutex_);
 
-    while (!pool.stop && pool.tasks.empty()) pool.condition.wait(lock);
+    while (!pool_.stop_ && pool_.tasks_.empty()) pool_.condition_.wait(lock);
 
-    if (pool.stop && pool.tasks.empty()) return;
+    if (pool_.stop_ && pool_.tasks_.empty()) return;
 
-    task = pool.tasks.top().second;
-    pool.tasks.pop();
+    task = pool_.tasks_.top().second;
+    pool_.tasks_.pop();
 
     lock.unlock();
     task();
@@ -80,10 +80,10 @@ inline void Worker::operator()() {
 }
 
 // the constructor just launches some amount of workers
-inline ThreadPool::ThreadPool(ThreadPool::size_type threads) : stop(false) {
-  workers.reserve(threads);
+inline ThreadPool::ThreadPool(ThreadPool::size_type threads) : stop_(false) {
+  workers_.reserve(threads);
 
-  for (ThreadPool::size_type i = 0; i < threads; ++i) workers.emplace_back(Worker(*this));
+  for (ThreadPool::size_type i = 0; i < threads; ++i) workers_.emplace_back(Worker(*this));
 }
 
 // add new work item to the pool
@@ -96,14 +96,14 @@ auto ThreadPool::enqueue(F &&f, Args &&...args) -> std::future<std::invoke_resul
 
   std::future<return_type> res = task->get_future();
   {
-    std::unique_lock<std::mutex> lock(queue_mutex);
+    std::unique_lock<std::mutex> lock(queue_mutex_);
 
     // don't allow enqueueing after stopping the pool
-    if (stop) throw std::runtime_error("enqueue on stopped ThreadPool");
+    if (stop_) throw std::runtime_error("enqueue on stopped ThreadPool");
 
-    tasks.emplace(0, [task]() { (*task)(); });
+    tasks_.emplace(0, [task]() { (*task)(); });
   }
-  condition.notify_one();
+  condition_.notify_one();
   return res;
 }
 
@@ -115,11 +115,11 @@ inline std::thread ThreadPool::thread_create(void *(*pfn)(void *), void *arg) { 
 
 // the destructor joins all threads
 inline ThreadPool::~ThreadPool() {
-  stop = true;
+  stop_ = true;
 
-  condition.notify_all();
+  condition_.notify_all();
 
-  for (ThreadPool::size_type i = 0; i < workers.size(); ++i) workers[i].join();
+  for (ThreadPool::size_type i = 0; i < workers_.size(); ++i) workers_[i].join();
 }
 
 #endif

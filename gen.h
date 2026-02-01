@@ -8,67 +8,67 @@
 
 class WriteBuffer {
  public:
-  Gen *gen{};
-  uint8_t *start{nullptr};
-  uint8_t *cur{nullptr};
-  uint8_t *end{nullptr};
-  uint8_t *last{nullptr};
-  int writing{0};
-  uint32_t phase{0}, committed_phase{0}, next_phase{0};
-  uint64_t offset{0}, next_offset{0};
-  uint64_t pad_position{0};
-  uint64_t committed_write_position{0};
-  uint64_t committed_write_serial{0};
-  ssize_t result{0};
+  Gen *gen_{};
+  uint8_t *start_{nullptr};
+  uint8_t *cur_{nullptr};
+  uint8_t *end_{nullptr};
+  uint8_t *last_{nullptr};
+  int writing_{0};
+  uint32_t phase_{0}, committed_phase_{0}, next_phase_{0};
+  uint64_t offset_{0}, next_offset_{0};
+  uint64_t pad_position_{0};
+  uint64_t committed_write_position_{0};
+  uint64_t committed_write_serial_{0};
+  ssize_t result_{0};
 
   void init(Gen *g, int i);
 };
 
 class Gen {
  public:
-  Slice *slice;
-  int igen;
-  Header *header{nullptr};
-  Header *sync_header{nullptr};
-  uint64_t size{0};
-  uint32_t buckets{0};
-  uint64_t header_offset{0};
-  uint64_t index_offset{0};
-  uint64_t index_size{0};
-  uint64_t log_offset[2];
-  uint64_t log_size{0};
-  uint64_t log_buffer_size{0};
-  uint64_t data_offset{0};
-  uint64_t data_size{0};
-  int index_parts{0};
+  Slice *slice_;
+  int igen_;
+  Header *header_{nullptr};
+  Header *sync_header_{nullptr};
+  uint64_t size_{0};
+  uint32_t buckets_{0};
+  uint64_t header_offset_{0};
+  uint64_t index_offset_{0};
+  uint64_t index_size_{0};
+  uint64_t log_offset_[2];
+  uint64_t log_size_{0};
+  uint64_t log_buffer_size_{0};
+  uint64_t data_offset_{0};
+  uint64_t data_size_{0};
+  int index_parts_{0};
 
-  void *raw_index{nullptr};
-  Index *index(int e) { return &((Index *)raw_index)[e]; }
-  uint8_t *index_dirty_marks{nullptr};
-  uint8_t *sync_buffer{nullptr};
-  int syncing{0};
-  void dirty_sector(int s) { index_dirty_marks[s / (INDEX_BYTES_PER_PART / SECTOR_SIZE)] = 1; }
-  int is_marked_part(int p) { return index_dirty_marks[p]; }
-  void unmark_part(int p) { index_dirty_marks[p] = 0; }
+  void *raw_index_{nullptr};
+  Index *index(int e) { return &((Index *)raw_index_)[e]; }
+  uint8_t *index_dirty_marks_{nullptr};
+  uint8_t *sync_buffer_{nullptr};
+  int syncing_{0};
+  void dirty_sector(int s) { index_dirty_marks_[s / (INDEX_BYTES_PER_PART / SECTOR_SIZE)] = 1; }
+  int is_marked_part(int p) { return index_dirty_marks_[p]; }
+  void unmark_part(int p) { index_dirty_marks_[p] = 0; }
 
-  WriteBuffer lbuf[LOG_BUFFERS];
-  WriteBuffer wbuf[WRITE_BUFFERS];
-  uint32_t cur_log{0};
-  uint32_t cur_write{0};
-  uint64_t log_position{0};
-  LookasideCache lookaside;
+  WriteBuffer lbuf_[LOG_BUFFERS];
+  WriteBuffer wbuf_[WRITE_BUFFERS];
+  uint32_t cur_log_{0};
+  uint32_t cur_write_{0};
+  uint64_t log_position_{0};
+  LookasideCache lookaside_;
 
-  std::condition_variable write_condition;
-  std::mutex mutex;
-  int sync_part{0};
-  uint64_t committed_write_position{0};
-  uint64_t committed_write_serial{0};
-  uint32_t committed_phase{0};
-  char *debug_log{nullptr}, *debug_log_ptr{nullptr};
+  std::condition_variable write_condition_;
+  std::mutex mutex_;
+  int sync_part_{0};
+  uint64_t committed_write_position_{0};
+  uint64_t committed_write_serial_{0};
+  uint32_t committed_phase_{0};
+  char *debug_log_{nullptr}, *debug_log_ptr_{nullptr};
 
   HDB *hdb();
-  int sectors() { return (buckets + (BUCKETS_PER_SECTOR - 1)) / BUCKETS_PER_SECTOR; }
-  int log_phase() { return header->index_serial & 1; }
+  int sectors() { return (buckets_ + (BUCKETS_PER_SECTOR - 1)) / BUCKETS_PER_SECTOR; }
+  int log_phase() { return header_->index_serial & 1; }
 
   void alloc_header();
   void init_header();

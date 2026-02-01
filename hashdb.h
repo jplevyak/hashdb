@@ -75,13 +75,13 @@ class HashDB {
 
   // Config variables           defaults
   // Config variables           defaults
-  int init_data_per_index = 16384;
-  bool reinit_on_open_error = false;
-  uint64_t write_buffer_size = 1024 * 1024;  // 1MB
-  int concurrency = 100;                     // * of slices
-  int sync_wait_msec = 50;
-  bool chain_collisions = false;  // for write-only only
-  std::unique_ptr<ThreadPool> thread_pool;
+  int init_data_per_index_ = 16384;
+  bool reinit_on_open_error_ = false;
+  uint64_t write_buffer_size_ = 1024 * 1024;  // 1MB
+  int concurrency_ = 100;                     // * of slices
+  int sync_wait_msec_ = 50;
+  bool chain_collisions_ = false;  // for write-only only
+  std::unique_ptr<ThreadPool> thread_pool_;
 
   int verify();      // Verify integrity of the database metadata (very expensive).
   int dump_debug();  // dump debug info (DEVELOPER)
