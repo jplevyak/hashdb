@@ -7,6 +7,7 @@
 #include <cassert>
 #include <limits>
 #include <chrono>
+#include "blake3.h"
 
 #include "hashdb.h"
 
@@ -34,7 +35,8 @@
 #define SYNC_PERIOD 5                  // seconds
 #define INDEX_BYTES_PER_PART (512 * 1024)
 #define LOG_BUFFERS 2
-#define LOG_FOOTER_SIZE (sizeof(LogHeaderFooter))
+#define LOG_FOOTER_SIZE 0
+#define LOG_HEADER_SIZE (sizeof(LogHeader))
 
 #define ROUND_TO(_x, _n) (((_x) + ((_n) - 1)) & ~((_n) - 1))
 #define ROUND_DOWN(_x, _n) ((_x) & ~((_n) - 1))
@@ -73,7 +75,7 @@ class Gen;
 class Slice;
 struct Doer;
 struct Data;
-struct LogHeaderFooter;
+struct LogHeader;
 struct LogEntry;
 
 // Templates and Helper Functions
@@ -182,7 +184,7 @@ class LookasideHashFns {
 
 typedef NBlockHash<Lookaside, LookasideHashFns> LookasideCache;
 
-struct LogHeaderFooter {
+struct LogHeader {
   uint64_t magic;
   uint64_t last_write_position;
   uint64_t write_position;
@@ -192,6 +194,7 @@ struct LogHeaderFooter {
   uint32_t size;
   uint32_t initial_phase;
   uint32_t final_phase;
+  uint8_t hash[32];
 };
 
 struct LogEntry {

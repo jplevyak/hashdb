@@ -285,14 +285,24 @@ int Gen::recover_log() {
       goto Lreturn;
     }
     keep = 0;
-    LogHeaderFooter *h = (LogHeaderFooter *)buf;
+    LogHeader *h = (LogHeader *)buf;
     if (h->magic != LOG_MAGIC || h->initial_phase != header_->phase ||
         h->last_write_position != header_->write_position || h->last_write_serial != header_->write_serial)
       break;
-    LogHeaderFooter *f = (LogHeaderFooter *)(buf + h->length - sizeof(LogHeaderFooter));
-    if (f->magic != LOG_MAGIC || f->initial_phase != header_->phase ||
-        f->last_write_position != header_->write_position || f->last_write_serial != header_->write_serial)
-      break;
+    
+    // Verify hash
+    blake3_hasher hasher;
+    uint8_t hash[32];
+    blake3_hasher_init(&hasher);
+    blake3_hasher_update(&hasher, buf + sizeof(LogHeader), h->length - sizeof(LogHeader));
+    blake3_hasher_finalize(&hasher, hash, BLAKE3_OUT_LEN);
+    
+    if (memcmp(hash, h->hash, 32) != 0) {
+      hdb()->warn("log corruption detected during recovery at offset %llu", wpos);
+      break; 
+    }
+
+    // No footer to check
     header_->write_serial = h->write_serial;
     header_->write_position = h->write_position;
     header_->phase = h->final_phase;
@@ -300,9 +310,9 @@ int Gen::recover_log() {
     committed_write_serial_ = header_->write_serial;
     committed_phase_ = header_->phase;
     log_position_ = wpos;
-    uint8_t *b = buf + sizeof(LogHeaderFooter);
+    uint8_t *b = buf + sizeof(LogHeader);
     while (1) {
-      if ((size_t)(h->length - (b - buf) - sizeof(LogHeaderFooter)) < sizeof(LogEntry)) {
+      if ((size_t)(h->length - (b - buf)) < sizeof(LogEntry)) {
         keep = l - (b - buf);
         if (keep >= l) goto Lreturn;
         break;
@@ -415,7 +425,7 @@ int Gen::open() {
     lbuf_[i].offset_ = std::numeric_limits<unsigned long long>::max();
     lbuf_[i].start_ = lbuf_[i].cur_ = (uint8_t *)new_aligned(log_buffer_size_);
     lbuf_[i].end_ = lbuf_[i].start_ + log_buffer_size_;
-    lbuf_[i].cur_ += sizeof(LogHeaderFooter);
+    lbuf_[i].cur_ += sizeof(LogHeader);
   }
   cur_log_ = 0;
   log_position_ = 0;
@@ -740,13 +750,12 @@ void Gen::write_buffer(int force_wrap) {
   return;
 }
 
-static void add_log_header_footer(WriteBuffer *b) {
-  LogHeaderFooter *h = (LogHeaderFooter *)b->start_;
-  LogHeaderFooter *f = (LogHeaderFooter *)b->cur_;
-  b->cur_ += LOG_FOOTER_SIZE;
+static void add_log_header(WriteBuffer *b) {
+  LogHeader *h = (LogHeader *)b->start_;
+  // No footer
   assert(b->cur_ <= b->end_);
   uint32_t l = b->cur_ - b->start_;
-  memset(h, 0, sizeof(LogHeaderFooter));
+  memset(h, 0, sizeof(LogHeader));
   h->magic = LOG_MAGIC;
   Gen *g = b->gen_;
   h->write_position = g->committed_write_position_;
@@ -756,8 +765,13 @@ static void add_log_header_footer(WriteBuffer *b) {
   h->last_write_serial = g->sync_header_->write_serial;
   h->final_phase = g->header_->phase;
   h->length = l;
-  // footer
-  memcpy(f, h, sizeof(LogHeaderFooter));
+
+  // Calculate Hash
+  blake3_hasher hasher;
+  blake3_hasher_init(&hasher);
+  blake3_hasher_update(&hasher, b->start_ + sizeof(LogHeader), l - sizeof(LogHeader));
+  blake3_hasher_finalize(&hasher, h->hash, BLAKE3_OUT_LEN);
+
   // padding
   uint32_t s = ROUND_TO(l, DATA_BLOCK_SIZE);
   if (s - l) memset(b->cur_, 0, s - l);
@@ -780,7 +794,7 @@ static void *do_write_log_buffer(WriteBuffer *b) {
 #endif
   g->log_position_ += b->cur_ - b->start_;
   b->writing_ = 0;
-  b->cur_ = b->start_ + sizeof(LogHeaderFooter);
+  b->cur_ = b->start_ + sizeof(LogHeader);
   g->write_condition_.notify_all();
   g->mutex_.unlock();
   return 0;
@@ -791,11 +805,10 @@ void Gen::write_log_buffer() {
   assert(b.start_ != b.cur_ && !b.writing_);
   b.writing_ = 1;
   if (log_position_ + (b.cur_ - b.start_) + LOG_FOOTER_SIZE > log_size_) {
-    hdb()->warn("out of log space, completing index sync");
     write_upto_index_part(index_parts_);
     complete_index_sync();
   }
-  add_log_header_footer(&b);
+  add_log_header(&b);
   uint32_t prev_log_write = (cur_log_ + (LOG_BUFFERS - 1)) % LOG_BUFFERS;
   wait_for_write_to_complete(&lbuf_[prev_log_write]);  // log writes initiated in order
   slice_->hdb_->thread_pool_->add_job((void *(*)(void *))do_write_log_buffer, (void *)&b);

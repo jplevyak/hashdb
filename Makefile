@@ -122,7 +122,8 @@ LIBS += -lm
 AUX_FILES = $(MODULE)/Makefile $(MODULE)/LICENSE $(MODULE)/README
 
 LIB_SRCS = hashdb.cc prime.cc slice.cc gen.cc
-LIB_OBJS = $(LIB_SRCS:%.cc=%.o)
+LIB_CSRCS = blake3.c blake3_portable.c blake3_dispatch.c
+LIB_OBJS = $(LIB_SRCS:%.cc=%.o) $(LIB_CSRCS:%.c=%.o)
 
 TEST_LIB_SRCS = test.cc
 TEST_LIB_OBJS = $(TEST_LIB_SRCS:%.cc=%.o)
@@ -151,6 +152,9 @@ version:
 
 version.o: version.cc
 	$(CXX) $(CFLAGS) $(VERSIONCFLAGS) -c version.cc
+
+%.o: %.c
+	$(CXX) $(CFLAGS) -c $< -o $@
 
 $(LIBRARY):  $(LIB_OBJS)
 	ar $(AR_FLAGS) $@ $^
