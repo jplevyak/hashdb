@@ -779,7 +779,7 @@ void Gen::write_log_buffer() {
   WriteBuffer &b = lbuf_[cur_log_];
   assert(b.start_ != b.cur_ && !b.writing_);
   b.writing_ = 1;
-  if (log_position_ + (b.cur_ - b.start_) + LOG_FOOTER_SIZE > log_size_) {
+  if (log_position_ + (b.cur_ - b.start_) > log_size_) {
     write_upto_index_part(index_parts_);
     complete_index_sync();
   }
@@ -1081,8 +1081,8 @@ Lagain:
     wait_for_write_to_complete(b);
     goto Lagain;
   }
-  assert(l + LOG_FOOTER_SIZE <= log_buffer_size_);
-  if (b->cur_ != b->start_ && b->cur_ + l + LOG_FOOTER_SIZE >= b->end_) {
+  assert(l <= log_buffer_size_);
+  if (b->cur_ != b->start_ && b->cur_ + l >= b->end_) {
     wait_for_write_commit(this, wpos, phase);
     write_log_buffer();
     goto Lagain;
@@ -1092,7 +1092,7 @@ Lagain:
 void Gen::insert_log(uint64_t *key, int nkeys, Index *i) {
   int l = sizeof(LogEntry) + sizeof(Index) + sizeof(*key) * nkeys;
   WriteBuffer *b = &lbuf_[cur_log_];
-  assert(b->cur_ + l + LOG_FOOTER_SIZE < b->end_);
+  assert(b->cur_ + l < b->end_);
   LogEntry *le = (LogEntry *)b->cur_;
   uint64_t *e = (uint64_t *)b->cur_;
   le->reserved = 0;

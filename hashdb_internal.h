@@ -37,7 +37,7 @@
 #define SYNC_PERIOD 5                  // seconds
 #define INDEX_BYTES_PER_PART (ATOMIC_WRITE_SIZE * 1024)
 #define LOG_BUFFERS 2
-#define LOG_FOOTER_SIZE 0
+
 #define LOG_HEADER_SIZE (sizeof(LogHeader))
 
 #define ROUND_TO(_x, _n) (((_x) + ((_n) - 1)) & ~((_n) - 1))
