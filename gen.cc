@@ -365,7 +365,7 @@ int Gen::recover_data() {
       }
       Data *d = (Data *)b;
       int len = size_to_length(d->size);
-      if (keep < (int)(len + FOOTER_SIZE)) {
+      if (keep < (int)(len)) {
         if (keep >= l) goto Lreturn;
         break;
       }
@@ -374,8 +374,6 @@ int Gen::recover_data() {
         if (!(d->padding && d->write_serial == wserial - 1)) goto Lreturn;
       }
       if (!d->padding) {
-        Data *f = (Data *)(b + len);
-        if (check_data(f, wpos + (b - buf) + len, size_to_length(f->size), f->offset, 1)) goto Lreturn;
         // printf("recovering data %s %d keys at %lld\n",  d->remove ? "remove" : "add", d->nkeys, data_offset + wpos +
         // (b - buf));
         commit_data(d, 1);
@@ -472,7 +470,6 @@ static inline void wait_for_write_commit(Gen *g, uint64_t wpos, int phase) {
 }
 
 WriteBuffer *Gen::get_buffer(int nkeys, uint64_t l) {
-  l += FOOTER_SIZE;
 Lagain:
   reserve_log_space(nkeys);
   WriteBuffer *b = &wbuf_[cur_write_];
@@ -482,7 +479,7 @@ Lagain:
   }
   if (l > hdb()->write_buffer_size_) return 0;
   int force_wrap = b->offset_ + (b->cur_ - b->start_) + l > data_offset_ + data_size_;
-  if (b->cur_ + l + FOOTER_SIZE > b->end_ || force_wrap) {
+  if (b->cur_ + l > b->end_ || force_wrap) {
     write_buffer(force_wrap);
     goto Lagain;
   }
@@ -613,27 +610,6 @@ void Gen::periodic_sync() {
   if (sync_part_ >= index_parts_) complete_index_sync();
 }
 
-static void append_footer(WriteBuffer *b) {
-  assert(b->cur_ + FOOTER_SIZE <= b->end_);
-  Data *dlast = (Data *)b->last_;
-  Data *d = (Data *)b->cur_;
-  memset((void *)d, 0, FOOTER_SIZE);
-  d->magic = DATA_MAGIC;
-  d->write_serial = dlast->write_serial;
-  uint32_t o = (b->offset_ + (b->cur_ - b->start_) - b->gen_->data_offset_) / ATOMIC_WRITE_SIZE;
-  d->slice = b->gen_->slice_->islice_;
-  d->gen = b->gen_->igen_;
-  d->reserved1 = 0;
-  d->offset = o;
-  ((&d->offset)[1]) = 0;  // clear flags
-  d->padding = 1;
-  d->nkeys = 0;
-  memset(d->hash, 0, 32);
-  d->length = FOOTER_SIZE - sizeof(Data) - sizeof(DataFooter);
-  d->size = 1;
-  b->cur_ += FOOTER_SIZE;
-}
-
 static void write_padding(WriteBuffer *b) {
   uint64_t left = b->gen_->data_size_ - b->pad_position_;
   Data *dlast = (Data *)b->last_;
@@ -712,7 +688,7 @@ void Gen::write_buffer(int force_wrap) {
   assert(!w.writing_);
   w.writing_ = 1;
   w.pad_position_ = 0;
-  append_footer(&w);
+
   uint64_t new_write_position = header_->write_position + (w.cur_ - w.start_);
   assert(new_write_position <= data_size_);
   if (new_write_position > data_size_ || force_wrap) {

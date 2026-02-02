@@ -31,7 +31,7 @@
 #define FREELIST_SIZE 16
 #define ELEMENTS_PER_BUCKET 8
 #define WRITE_BUFFERS 2  // do not change without modifying write_buffer()
-#define FOOTER_SIZE ATOMIC_WRITE_SIZE
+
 #define STALE_INDEX_RESULT 0           // ok to not delete or evacuate data
 #define SLICE_INDEX_MISMATCH_RESULT 0  // ok not match slice index
 #define SYNC_PERIOD 5                  // seconds
