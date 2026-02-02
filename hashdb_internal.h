@@ -158,11 +158,11 @@ struct Header {
 };
 
 struct Index {
-  uint32_t offset : 32;  // ATOMIC_WRITE_SIZE * 2^32
-  uint32_t tag : 16;     // 64k/8 entries/bucket =~ .0122% collision
-  uint32_t size : 11;    // ATOMIC_WRITE_SIZE * 4k
-  uint32_t next : 4;     // 16 possible next entries, 1 == remove in log/lookaside
-  uint32_t phase : 1;
+  uint64_t offset : 32;  // ATOMIC_WRITE_SIZE * 2^32
+  uint64_t tag : 16;     // 64k/8 entries/bucket =~ .0122% collision
+  uint64_t size : 11;    // ATOMIC_WRITE_SIZE * 4k
+  uint64_t next : 4;     // 16 possible next entries, 1 == remove in log/lookaside
+  uint64_t phase : 1;
   Index(uint32_t aoffset, uint16_t atag, uint32_t asize, uint32_t anext, uint32_t aphase)
       : offset(aoffset), tag(atag), size(asize), next(anext), phase(aphase) {}
   Index(Index *i) { *(uint64_t *)this = *(uint64_t *)i; }
