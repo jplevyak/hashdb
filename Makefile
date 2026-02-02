@@ -97,25 +97,28 @@ endif
 BUILD_VERSION = $(shell git show-ref 2> /dev/null | head -1 | cut -d ' ' -f 1)
 VERSIONCFLAGS += -DMAJOR_VERSION=$(MAJOR) -DMINOR_VERSION=$(MINOR) -DBUILD_VERSION=\"$(BUILD_VERSION)\"
 
-CFLAGS += -std=c++20
 
-CFLAGS += -Wall -Wno-strict-aliasing
+
+COMMON_FLAGS += -Wall -Wno-strict-aliasing -MMD -MP
 # debug flags
 ifdef DEBUG
-CFLAGS += -g -DDEBUG=1
+COMMON_FLAGS += -g -DDEBUG=1
 endif
 # optimized flags
 ifdef OPTIMIZE
-CFLAGS += -O3 -march=native
+COMMON_FLAGS += -O3 -march=native
 endif
 ifdef PROFILE
-CFLAGS += -pg
+COMMON_FLAGS += -pg
 endif
 ifdef VALGRIND
-CFLAGS += -DVALGRIND_TEST
+COMMON_FLAGS += -DVALGRIND_TEST
 endif
 
-CPPFLAGS += $(CFLAGS)
+COMMON_FLAGS += $(CFLAGS)
+CFLAGS := $(COMMON_FLAGS)
+CXXFLAGS += $(COMMON_FLAGS) -std=c++23
+
 
 LIBS += -lm
 
@@ -144,23 +147,24 @@ endif
 
 ALL_SRCS = $(LIB_SRCS) $(LIB_SRCS) $(TEST_LIB_SRCS)
 DEPEND_SRCS = $(ALL_SRCS)
+DEPS = $(ALL_SRCS:%.cc=%.d) $(LIB_CSRCS:%.c=%.d)
 
 all: $(LIBRARY) test LICENSE.i COPYRIGHT.i
 
 version:
-	@echo $(MODULE) $(MAJOR).$(MINOR).$(BUILD_VERSION) '('$(OS_TYPE) $(OS_VERSION)')' $(CFLAGS)
+	@echo $(MODULE) $(MAJOR).$(MINOR).$(BUILD_VERSION) '('$(OS_TYPE) $(OS_VERSION)')' $(CXXFLAGS)
 
 version.o: version.cc
-	$(CXX) $(CFLAGS) $(VERSIONCFLAGS) -c version.cc
+	$(CXX) $(CXXFLAGS) $(VERSIONCFLAGS) -c version.cc
 
 %.o: %.c
-	$(CXX) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(LIBRARY):  $(LIB_OBJS)
 	ar $(AR_FLAGS) $@ $^
 
 $(TEST_EXEC): test.o $(LIB_OBJS)
-	$(CXX) $(CFLAGS) -DTEST_LIB=1 test.o $(LDFLAGS) $(LIB_OBJS) -o $@ $(LIBS)
+	$(CXX) $(CXXFLAGS) -DTEST_LIB=1 test.o $(LDFLAGS) $(LIB_OBJS) -o $@ $(LIBS)
 
 LICENSE.i: LICENSE
 	rm -f LICENSE.i
@@ -174,19 +178,9 @@ test: $(TEST_EXEC)
 	./$(TEST_EXEC)
 
 clean:
-	\rm -f *.o core *.core *.gmon LICENSE.i COPYRIGHT.i $(EXECUTABLES) $(TEST_EXEC)
+	\rm -f *.o *.d core *.core *.gmon LICENSE.i COPYRIGHT.i $(EXECUTABLES) $(TEST_EXEC)
 
 realclean: clean
 	\rm -f *.a *.orig *.rej svn-commit.tmp
 
-depend:
-	./mkdep $(CFLAGS) $(DEPEND_SRCS)
-
-version.o: Makefile
-
-# DO NOT DELETE THIS LINE -- mkdep uses it.
-# DO NOT PUT ANYTHING AFTER THIS LINE, IT WILL GO AWAY.
-
-test.o: test.cc
-
-# IF YOU PUT ANYTHING HERE IT WILL GO AWAY
+-include $(DEPS)

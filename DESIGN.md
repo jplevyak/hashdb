@@ -128,7 +128,7 @@ Recovery cost is proportional to the amount of data written since the last succe
 *   **Sync Thread**: A background thread ([sync_main](hashdb.cc#139-152)) wakes up periodically to flush buffers and commit index changes to disk.
 
 ## Storage Format Constants
-*   `SECTOR_SIZE`: 512 bytes (aligned for atomic sector writes).
-*   `DATA_BLOCK_SIZE`: 512 bytes (unit of allocation).
+*   `ATOMIC_WRITE_SIZE`: 512 bytes (aligned for atomic sector writes, unit of allocation).
+*   `SAFE_BLOCK_SIZE`: 4096 bytes (safe for atomic writes on modern storage like SSDs).
 *   `BUCKETS_PER_SECTOR`: 6.
 *   `ELEMENTS_PER_SECTOR`: 64 (Index entries).

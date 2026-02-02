@@ -8,6 +8,7 @@
 #include <limits>
 #include <chrono>
 #include "blake3.h"
+#include <print>
 
 #include "hashdb.h"
 
@@ -18,22 +19,23 @@
 #define BAD_DATA ((void *)(uintptr_t)-1)
 #define HDB_MAJOR_VERSION 0
 #define HDB_MINOR_VERSION 1
-#define SIZE_4K 4096
+// ATOMIC_WRITE_SIZE is the max atomic write size (conservatively for different hardware types)
+#define ATOMIC_WRITE_SIZE 512
+// SAFE_BLOCK_SIZE is the min safe block size (e.g. 4096 for M.2 SSDs)
+#define SAFE_BLOCK_SIZE 4096
 #define SIZE_8K 8192
-#define SAFE_SECTOR_SIZE SIZE_4K  // prepare for 4k native physical sector size
-#define SECTOR_SIZE 512
-#define ELEMENTS_PER_SECTOR 64  // 512 / 8 bytes = 64
+
+#define ELEMENTS_PER_SECTOR (ATOMIC_WRITE_SIZE / 8)
 #define BUCKETS_PER_SECTOR 6
 #define BUCKET_SIZE 8
 #define FREELIST_SIZE 16
 #define ELEMENTS_PER_BUCKET 8
-#define WRITE_BUFFERS 2      // do not change without modifying write_buffer()
-#define DATA_BLOCK_SIZE 512  // change to 4k for 4k native physical sector size
-#define FOOTER_SIZE DATA_BLOCK_SIZE
+#define WRITE_BUFFERS 2  // do not change without modifying write_buffer()
+#define FOOTER_SIZE ATOMIC_WRITE_SIZE
 #define STALE_INDEX_RESULT 0           // ok to not delete or evacuate data
 #define SLICE_INDEX_MISMATCH_RESULT 0  // ok not match slice index
 #define SYNC_PERIOD 5                  // seconds
-#define INDEX_BYTES_PER_PART (512 * 1024)
+#define INDEX_BYTES_PER_PART (ATOMIC_WRITE_SIZE * 1024)
 #define LOG_BUFFERS 2
 #define LOG_FOOTER_SIZE 0
 #define LOG_HEADER_SIZE (sizeof(LogHeader))
@@ -41,7 +43,7 @@
 #define ROUND_TO(_x, _n) (((_x) + ((_n) - 1)) & ~((_n) - 1))
 #define ROUND_DOWN(_x, _n) ((_x) & ~((_n) - 1))
 #define ROUND_DIV(_x, _n) (((_x) + ((_n) - 1)) / (_n))
-#define ROUND_DOWN_SAFE_SECTOR_SIZE(_x) ROUND_DOWN(_x, SAFE_SECTOR_SIZE)
+#define ROUND_DOWN_SAFE_BLOCK_SIZE(_x) ROUND_DOWN(_x, SAFE_BLOCK_SIZE)
 #define KEY2TAG(_x) ((_x) >> 48)
 #define MODULAR_DIFFERENCE(_x, _y, _m) (((_x) + (_m) - (_y)) % (_m))
 
@@ -115,17 +117,20 @@ class NBlockHash {
 
 static inline void *new_aligned(size_t s) {
   void *p = nullptr;
-  size_t alignment = SAFE_SECTOR_SIZE;
+  size_t alignment = SAFE_BLOCK_SIZE;
   size_t rounded_s = (s + alignment - 1) & ~(alignment - 1);
   int res = posix_memalign(&p, alignment, rounded_s);
   if (res != 0) return nullptr;
   return p;
 }
 
+using std::print;
+using std::println;
+
 static inline void delete_aligned(void *p) { free(p); }
 
 static inline uint32_t length_to_size(uint64_t l) {
-  uint64_t b = DATA_BLOCK_SIZE;
+  uint64_t b = ATOMIC_WRITE_SIZE;
   uint32_t m = 0;
   while (1) {
     if (l < 256 * b) return (m << 8) + ROUND_DIV(l, b);
@@ -134,7 +139,7 @@ static inline uint32_t length_to_size(uint64_t l) {
   }
 }
 
-static inline uint64_t size_to_length(uint64_t s) { return (s & 255) * ((1 << ((s >> 8) * 4)) * DATA_BLOCK_SIZE); }
+static inline uint64_t size_to_length(uint64_t s) { return (s & 255) * ((1 << ((s >> 8) * 4)) * ATOMIC_WRITE_SIZE); }
 
 // Structures
 
@@ -153,9 +158,9 @@ struct Header {
 };
 
 struct Index {
-  uint32_t offset : 32;  // DATA_BLOCK_SIZE * 2^32
+  uint32_t offset : 32;  // ATOMIC_WRITE_SIZE * 2^32
   uint32_t tag : 16;     // 64k/8 entries/bucket =~ .0122% collision
-  uint32_t size : 11;    // DATA_BLOCK_SIZE * 4k
+  uint32_t size : 11;    // ATOMIC_WRITE_SIZE * 4k
   uint32_t next : 4;     // 16 possible next entries, 1 == remove in log/lookaside
   uint32_t phase : 1;
   Index(uint32_t aoffset, uint16_t atag, uint32_t asize, uint32_t anext, uint32_t aphase)

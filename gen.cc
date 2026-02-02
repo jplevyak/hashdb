@@ -107,29 +107,29 @@ void Gen::dump_debug_log() {
 }
 
 void Gen::alloc_header() {
-  if (!header_) header_ = (Header *)new_aligned(SAFE_SECTOR_SIZE);
-  memset(header_, 0, SAFE_SECTOR_SIZE);
-  if (!sync_header_) sync_header_ = (Header *)new_aligned(SAFE_SECTOR_SIZE);
-  memset(sync_header_, 0, SAFE_SECTOR_SIZE);
+  if (!header_) header_ = (Header *)new_aligned(SAFE_BLOCK_SIZE);
+  memset(header_, 0, SAFE_BLOCK_SIZE);
+  if (!sync_header_) sync_header_ = (Header *)new_aligned(SAFE_BLOCK_SIZE);
+  memset(sync_header_, 0, SAFE_BLOCK_SIZE);
 }
 
 void Gen::compute_sizes(uint64_t asize, uint32_t data_per_index) {
   if (!asize) {
     uint64_t tmp = slice_->size_;
-    tmp = ROUND_DOWN_SAFE_SECTOR_SIZE(tmp / slice_->gen_.size());
+    tmp = ROUND_DOWN_SAFE_BLOCK_SIZE(tmp / slice_->gen_.size());
     if (slice_->is_raw_)  // don't overwrite MBR
-      tmp -= SAFE_SECTOR_SIZE;
+      tmp -= SAFE_BLOCK_SIZE;
     asize = tmp;
   }
   size_ = asize;
   if (slice_->is_raw_)  // don't overwrite MBR
-    header_offset_ = SAFE_SECTOR_SIZE;
+    header_offset_ = SAFE_BLOCK_SIZE;
   else
     header_offset_ = 0;
   header_offset_ += size_ * igen_;
   // compute buckets
   uint64_t s = size_;
-  s -= SAFE_SECTOR_SIZE;  // header + footer
+  s -= SAFE_BLOCK_SIZE;  // header + footer
   uint64_t i = s / data_per_index;
   int sectors = i / ELEMENTS_PER_SECTOR;
   buckets_ = sectors * BUCKETS_PER_SECTOR;
@@ -140,18 +140,18 @@ void Gen::compute_sizes(uint64_t asize, uint32_t data_per_index) {
   i *= ELEMENTS_PER_SECTOR;
   i *= sizeof(Index);
   assert(8 == sizeof(Index));
-  index_size_ = ROUND_TO(i, SAFE_SECTOR_SIZE);
+  index_size_ = ROUND_TO(i, SAFE_BLOCK_SIZE);
   index_parts_ = ROUND_DIV(index_size_, INDEX_BYTES_PER_PART);
   log_size_ = index_size_;
   log_buffer_size_ = hdb()->write_buffer_size_ < log_size_ ? hdb()->write_buffer_size_ : log_size_;
   // compute offsets
-  index_offset_ = header_offset_ + SAFE_SECTOR_SIZE;
+  index_offset_ = header_offset_ + SAFE_BLOCK_SIZE;
   log_offset_[0] = index_offset_ + index_size_;
   log_offset_[1] = log_offset_[0] + log_size_;
   data_offset_ = log_offset_[1] + log_size_;
   // compute data length
-  data_size_ = s - header_offset_ - SAFE_SECTOR_SIZE - index_size_ - log_size_;
-  data_size_ = ROUND_DOWN_SAFE_SECTOR_SIZE(data_size_);
+  data_size_ = s - header_offset_ - SAFE_BLOCK_SIZE - index_size_ - log_size_;
+  data_size_ = ROUND_DOWN_SAFE_BLOCK_SIZE(data_size_);
   assert(data_size_ >= hdb()->write_buffer_size_);
   // printf("index_size = %llu data_size = %llu data_offset = %llu\n", index_size, data_size, data_offset);
 }
@@ -171,12 +171,12 @@ void Gen::init_header() {
   header_->data_per_index = hdb()->init_data_per_index_;
   header_->size = size_;
   header_->generations = slice_->gen_.size();
-  memcpy(sync_header_, header_, SAFE_SECTOR_SIZE);
+  memcpy(sync_header_, header_, SAFE_BLOCK_SIZE);
 }
 
 int Gen::load_header() {
   alloc_header();
-  if (pread(slice_->fd_, header_, SAFE_SECTOR_SIZE, header_offset_) != SAFE_SECTOR_SIZE) return -1;
+  if (pread(slice_->fd_, header_, SAFE_BLOCK_SIZE, header_offset_) != SAFE_BLOCK_SIZE) return -1;
   return 0;
 }
 
@@ -192,7 +192,7 @@ void Gen::free_header() {
 }
 
 void Gen::snap_header() {
-  memcpy(sync_header_, header_, SAFE_SECTOR_SIZE);
+  memcpy(sync_header_, header_, SAFE_BLOCK_SIZE);
   sync_header_->write_position = committed_write_position_;
   sync_header_->write_serial = committed_write_serial_;
   sync_header_->phase = committed_phase_;
@@ -288,17 +288,17 @@ int Gen::recover_log() {
     if (h->magic != LOG_MAGIC || h->initial_phase != header_->phase ||
         h->last_write_position != header_->write_position || h->last_write_serial != header_->write_serial)
       break;
-    
+
     // Verify hash
     blake3_hasher hasher;
     uint8_t hash[32];
     blake3_hasher_init(&hasher);
     blake3_hasher_update(&hasher, buf + sizeof(LogHeader), h->length - sizeof(LogHeader));
     blake3_hasher_finalize(&hasher, hash, BLAKE3_OUT_LEN);
-    
+
     if (memcmp(hash, h->hash, 32) != 0) {
       hdb()->warn("log corruption detected during recovery at offset %llu", wpos);
-      break; 
+      break;
     }
 
     // No footer to check
@@ -405,7 +405,6 @@ int Gen::load_index() {
   if (recovery() < 0) return -1;
   return 0;
 }
-
 
 int Gen::open() {
   mutex_.lock();
@@ -533,7 +532,7 @@ void Gen::write_index() {
 }
 
 void Gen::write_header(Header *aheader) {
-  if (pwrite(slice_->fd_, aheader, SAFE_SECTOR_SIZE, header_offset_) != (ssize_t)SAFE_SECTOR_SIZE)
+  if (pwrite(slice_->fd_, aheader, SAFE_BLOCK_SIZE, header_offset_) != (ssize_t)SAFE_BLOCK_SIZE)
     hdb()->err("unable to save header for gen %d '%s'", igen_, slice_->pathname_);
 }
 
@@ -549,10 +548,10 @@ int Gen::save() {
 static int verify_offset(Gen *g, Index *i) {
   if (i->size) {
     if (g->committed_phase_ == i->phase) {
-      uint64_t o = ((uint64_t)i->offset) * DATA_BLOCK_SIZE + size_to_length(i->size);
+      uint64_t o = ((uint64_t)i->offset) * ATOMIC_WRITE_SIZE + size_to_length(i->size);
       if (g->committed_write_position_ < o) return -1;
     } else {
-      uint64_t o = ((uint64_t)i->offset) * DATA_BLOCK_SIZE;
+      uint64_t o = ((uint64_t)i->offset) * ATOMIC_WRITE_SIZE;
       if (g->committed_write_position_ > o) return -1;
     }
   }
@@ -621,7 +620,7 @@ static void append_footer(WriteBuffer *b) {
   memset((void *)d, 0, FOOTER_SIZE);
   d->magic = DATA_MAGIC;
   d->write_serial = dlast->write_serial;
-  uint32_t o = (b->offset_ + (b->cur_ - b->start_) - b->gen_->data_offset_) / DATA_BLOCK_SIZE;
+  uint32_t o = (b->offset_ + (b->cur_ - b->start_) - b->gen_->data_offset_) / ATOMIC_WRITE_SIZE;
   d->slice = b->gen_->slice_->islice_;
   d->gen = b->gen_->igen_;
   d->reserved1 = 0;
@@ -649,7 +648,7 @@ static void write_padding(WriteBuffer *b) {
   d->padding = 1;
   d->nkeys = 0;
   uint32_t s = length_to_size(left);
-  uint32_t o = b->pad_position_ / DATA_BLOCK_SIZE;
+  uint32_t o = b->pad_position_ / ATOMIC_WRITE_SIZE;
   // multiple size pads to hit the end exactly
   for (uint32_t i = 0; i <= (s >> 8); i++) {
     if (!left) break;
@@ -666,7 +665,7 @@ static void write_padding(WriteBuffer *b) {
     d->size = length_to_size(left);
     if (b->gen_->pwrite(b->gen_->slice_->fd_, b->start_, left, b->pad_position_ + b->gen_->data_offset_) < 0)
       b->gen_->hdb()->err("write error, errno %d slice %d generation %d offset %lld length %d", errno,
-                         b->gen_->slice_->islice_, b->gen_->igen_, b->pad_position_ + b->gen_->data_offset_, left);
+                          b->gen_->slice_->islice_, b->gen_->igen_, b->pad_position_ + b->gen_->data_offset_, left);
     o += left;
     left = still_left;
     s = length_to_size(left);
@@ -773,7 +772,7 @@ static void add_log_header(WriteBuffer *b) {
   blake3_hasher_finalize(&hasher, h->hash, BLAKE3_OUT_LEN);
 
   // padding
-  uint32_t s = ROUND_TO(l, DATA_BLOCK_SIZE);
+  uint32_t s = ROUND_TO(l, ATOMIC_WRITE_SIZE);
   if (s - l) memset(b->cur_, 0, s - l);
   b->cur_ += s - l;  // pad out
 }
@@ -913,8 +912,8 @@ int Gen::check_data(Data *d, uint64_t o, uint64_t l, uint32_t offset, int recove
   }
   if (d->offset != offset) {
     if (!recovery)
-      hdb()->err("bad data offset, slice %d generation %d offset %lld, data offset %d, offset %d", slice_->islice_, igen_,
-                 o, d->offset, offset);
+      hdb()->err("bad data offset, slice %d generation %d offset %lld, data offset %d, offset %d", slice_->islice_,
+                 igen_, o, d->offset, offset);
     return -1;
   }
   if ((int)d->gen != igen_) {
@@ -1158,7 +1157,7 @@ int Gen::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::SerializeFn
   Data *d = (Data *)b->cur_;
   d->magic = DATA_MAGIC;
   d->write_serial = header_->write_serial++;
-  uint32_t o = (b->offset_ + (b->cur_ - b->start_) - data_offset_) / DATA_BLOCK_SIZE;
+  uint32_t o = (b->offset_ + (b->cur_ - b->start_) - data_offset_) / ATOMIC_WRITE_SIZE;
   d->slice = slice_->islice_;
   d->gen = igen_;
   d->reserved1 = 0;
@@ -1180,9 +1179,9 @@ int Gen::write(uint64_t *key, int nkeys, uint64_t value_len, HashDB::SerializeFn
   // Calculate Hash
   blake3_hasher hasher;
   blake3_hasher_init(&hasher);
-  blake3_hasher_update(&hasher, d, (uint8_t*)d->hash - (uint8_t*)d);
+  blake3_hasher_update(&hasher, d, (uint8_t *)d->hash - (uint8_t *)d);
   // Hash from chain start to end of block
-  blake3_hasher_update(&hasher, d->chain, (uint8_t*)d + l - (uint8_t*)d->chain);
+  blake3_hasher_update(&hasher, d->chain, (uint8_t *)d + l - (uint8_t *)d->chain);
   blake3_hasher_finalize(&hasher, d->hash, BLAKE3_OUT_LEN);
 
   if (hdb()->chain_collisions_) chain_keys_for_write(d);
@@ -1211,7 +1210,7 @@ int Gen::write_remove(uint64_t *key, int nkeys, Index *i) {
   Data *d = (Data *)b->cur_;
   d->magic = DATA_MAGIC;
   d->write_serial = header_->write_serial++;
-  uint32_t o = (b->offset_ + (b->cur_ - b->start_) - data_offset_) / DATA_BLOCK_SIZE;
+  uint32_t o = (b->offset_ + (b->cur_ - b->start_) - data_offset_) / ATOMIC_WRITE_SIZE;
   d->slice = slice_->islice_;
   d->gen = igen_;
   d->reserved1 = 0;
@@ -1233,8 +1232,8 @@ int Gen::write_remove(uint64_t *key, int nkeys, Index *i) {
   // Calculate Hash
   blake3_hasher hasher;
   blake3_hasher_init(&hasher);
-  blake3_hasher_update(&hasher, d, (uint8_t*)d->hash - (uint8_t*)d);
-  blake3_hasher_update(&hasher, d->chain, (uint8_t*)d + l - (uint8_t*)d->chain);
+  blake3_hasher_update(&hasher, d, (uint8_t *)d->hash - (uint8_t *)d);
+  blake3_hasher_update(&hasher, d->chain, (uint8_t *)d + l - (uint8_t *)d->chain);
   blake3_hasher_finalize(&hasher, d->hash, BLAKE3_OUT_LEN);
 
   b->last_ = b->cur_;
@@ -1261,7 +1260,7 @@ int Gen::read_element(Index *i, uint64_t key, std::vector<HashDB::Extent> &hit) 
 
 Data *Gen::read_data(Index *i) {
   uint32_t l = size_to_length(i->size);
-  uint64_t o = data_offset_ + ((uint64_t)i->offset) * DATA_BLOCK_SIZE;
+  uint64_t o = data_offset_ + ((uint64_t)i->offset) * ATOMIC_WRITE_SIZE;
   void *buf = new_aligned(l);
   for (int x = 0; x < WRITE_BUFFERS; x++) {
     if (wbuf_[x].offset_ <= o && o + l <= wbuf_[x].offset_ + (wbuf_[x].cur_ - wbuf_[x].start_)) {
@@ -1292,8 +1291,8 @@ Lfound: {
     blake3_hasher hasher;
     uint8_t hash[32];
     blake3_hasher_init(&hasher);
-    blake3_hasher_update(&hasher, d, (uint8_t*)d->hash - (uint8_t*)d);
-    blake3_hasher_update(&hasher, d->chain, (uint8_t*)d + l - (uint8_t*)d->chain);
+    blake3_hasher_update(&hasher, d, (uint8_t *)d->hash - (uint8_t *)d);
+    blake3_hasher_update(&hasher, d->chain, (uint8_t *)d + l - (uint8_t *)d->chain);
     blake3_hasher_finalize(&hasher, hash, BLAKE3_OUT_LEN);
     if (memcmp(hash, d->hash, 32) != 0) {
       hdb()->err("hash mismatch reading data at offset %llu slice %d gen %d", o, slice_->islice_, igen_);

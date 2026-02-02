@@ -47,7 +47,7 @@ class Gen {
   uint8_t *index_dirty_marks_{nullptr};
   uint8_t *sync_buffer_{nullptr};
   int syncing_{0};
-  void dirty_sector(int s) { index_dirty_marks_[s / (INDEX_BYTES_PER_PART / SECTOR_SIZE)] = 1; }
+  void dirty_sector(int s) { index_dirty_marks_[s / (INDEX_BYTES_PER_PART / ATOMIC_WRITE_SIZE)] = 1; }
   int is_marked_part(int p) { return index_dirty_marks_[p]; }
   void unmark_part(int p) { index_dirty_marks_[p] = 0; }
 

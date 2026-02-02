@@ -25,9 +25,11 @@
 #include <fcntl.h>
 #include <limits>
 #include <cstring>
+#include <format>
+#include <iostream>
+#include <span>
 
 #define SPECIAL_CALLBACK(_c) 0
-
 
 void fail(const char *s, ...);
 
@@ -57,9 +59,7 @@ int HDB::warn(cchar *format, ...) {
   return 1;
 }
 
-void HDB::free_slices() {
-  slice_.clear();
-}
+void HDB::free_slices() { slice_.clear(); }
 
 struct SafeLatch {
   std::mutex m;
@@ -229,12 +229,12 @@ static void *do_read_job(Reader *r) {
     std::vector<HashDB::Extent> hits;
     ssize_t total_result = 0;
     for (int i = 0; i < head->found; i++) {
-        hits.insert(hits.end(), head[i].hit.begin(), head[i].hit.end());
-        total_result |= head[i].result;
+      hits.insert(hits.end(), head[i].hit.begin(), head[i].hit.end());
+      total_result |= head[i].result;
     }
     // For found==0 case, head->found is 0, loops don't run, hits empty. result is head[0].result (set to 1).
     if (head->found == 0) total_result = head[0].result;
-    
+
     if (head->callback) head->callback(total_result, hits);
     delete r->pending_count;
     delete[] head;
@@ -253,18 +253,18 @@ int HashDB::read(uint64_t key, ReadCallback callback, bool immediate_miss) {
   int size = (found ? found : 1);
   Reader *areader = new Reader[size];
   for (int i = 0; i < found; i++) areader[i] = reader[i];
-  
+
   std::atomic<int> *pending = new std::atomic<int>(size);
-  
+
   areader[0].s = hdb->slice_[0].get();
   areader[0].found = found;
   areader[0].callback = callback;
   areader[0].result = !found;
 
   for (int i = 0; i < size; i++) {
-      areader[i].pending_count = pending;
-      areader[i].head = areader;
-      hdb->thread_pool_->add_job((void *(*)(void *))do_read_job, (void *)&areader[i]);
+    areader[i].pending_count = pending;
+    areader[i].head = areader;
+    hdb->thread_pool_->add_job((void *(*)(void *))do_read_job, (void *)&areader[i]);
   }
   return 0;
 }
@@ -299,21 +299,20 @@ static void *do_write_job(Writer *w) {
   // Replication code logic would go here, adapted for job-based execution
 #endif
   w->result = w->s->write(w->key, w->nkeys, w->value_len, w->serializer, w->mode);
-  
+
   if (w->pending_count->fetch_sub(1) == 1) {
     Writer *head = w->head;
     ssize_t total_result = 0;
     // Aggregate results from multiple writes (if replication is enabled)
 
-    int n = 1; // Default
+    int n = 1;  // Default
 #ifdef INCOMPLETE_REPLICATION_CODE
-     n = w->s->hdb->replication_factor;
-     if (!n) n = 1;
+    n = w->s->hdb->replication_factor;
+    if (!n) n = 1;
 #endif
-    for(int i=0; i<n; ++i) total_result |= head[i].result;
+    for (int i = 0; i < n; ++i) total_result |= head[i].result;
 
     if (head->callback) head->callback(total_result);
-
 
     delete head->pending_count;
     delete[] head;
@@ -410,9 +409,9 @@ static inline void wait_for_log_flush(Gen *g, int wait_msec) {
 static void *do_remove_job(Writer *w) {
   w->result = w->s->hdb_->remove(w->old_data, nullptr, w->mode);
   if (w->pending_count->fetch_sub(1) == 1) {
-      if (w->callback) w->callback(w->result);
-      delete w->pending_count;
-      delete[] w->head;
+    if (w->callback) w->callback(w->result);
+    delete w->pending_count;
+    delete[] w->head;
   }
   return nullptr;
 }
@@ -451,14 +450,14 @@ int HashDB::remove(void *old_data, WriteCallback callback, SyncMode mode) {
   // int size = sizeof(Writer) * nn;
   Writer *awriter = new Writer[nn];
   std::atomic<int> *pending = new std::atomic<int>(nn);
-  
+
   awriter[0].s = s;
   awriter[0].callback = callback;
   awriter[0].mode = mode;
   awriter[0].old_data = old_data;
   awriter[0].pending_count = pending;
   awriter[0].head = awriter;
-  
+
   hdb->thread_pool_->add_job((void *(*)(void *))do_remove_job, (void *)&awriter[0]);
   return 0;
 }
@@ -479,7 +478,7 @@ int HashDB::dump_debug() {
   HDB *hdb = ((HDB *)this);
   for (const auto &s : hdb->slice_) {
     for (const auto &g : s->gen_) {
-      printf("Slice %d Gen %d\n", s->islice_, g->igen_);
+      println("Slice {} Gen {}", s->islice_, g->igen_);
       g->dump_debug_log();
     }
   }
@@ -532,9 +531,9 @@ void HDB::crash() {
   hdb->mutex_.lock();
   for (const auto &s : hdb->slice_) {
     if (s->fd_ != -1) {
-      ::close(s->fd_); 
-        // Just close FD, no flush
-       s->fd_ = -1;
+      ::close(s->fd_);
+      // Just close FD, no flush
+      s->fd_ = -1;
     }
     // We don't free memory here to simulate "process exit" behavior (OS reclaims)
     // but in a test suite we leak. That's acceptable for a "crash" test helper?
@@ -549,7 +548,7 @@ void HDB::crash() {
   }
   // Clean up thread pool to avoid it running after we destroy/leak
   if (hdb->thread_pool_allocated_) {
-      thread_pool_.reset();
+    thread_pool_.reset();
   }
   hdb->mutex_.unlock();
   // We don't delete HDB itself, test caller should handle object life cycle?
@@ -571,7 +570,7 @@ int HashDB::free_chunk(void *ptr) {
 
 void hashdb_print_data_header(void *p) {
   Data *d = PTR_TO_DATA(p);
-  printf("offset %u phase %d remove %d\n", d->offset, d->phase, d->remove);
+  println("offset {} phase {} remove {}", d->offset, (int)d->phase, (int)d->remove);
 }
 
 /* Test functions accessing internal data
@@ -580,7 +579,9 @@ void hashdb_print_info(HashDB *dd) {
   HDB *d = (HDB *)dd;
   for (const auto &slice : d->slice_) {
     for (const auto &g : slice->gen_) {
-      printf("Slice %d Gen %d size %lu phase %d\n", slice->islice_, g->igen_, g->header_->size, g->header_->phase);
+      std::cout << std::format("Slice {} Gen {} size {} phase {}", slice->islice_, g->igen_, g->header_->size,
+                               g->header_->phase)
+                << std::endl;
     }
   }
 }
@@ -626,14 +627,14 @@ void hashdb_index_fullness(HashDB *dd) {
       lacount += g->lookaside_.count();
     }
   }
-  printf("bcount: ");
-  for (int i = 0; i < 9; i++) printf("%4d ", bcount[i]);
-  printf("\nocount: ");
-  for (int i = 0; i < 17; i++) printf("%4d ", ocount[i]);
-  printf("\nfcount: ");
-  for (int i = 0; i < 17; i++) printf("%4d ", fcount[i]);
-  printf("\nlacount: %d", lacount);
-  printf("\n");
+  print("bcount: ");
+  for (int i = 0; i < 9; i++) print("{:4} ", bcount[i]);
+  print("\nocount: ");
+  for (int i = 0; i < 17; i++) print("{:4} ", ocount[i]);
+  print("\nfcount: ");
+  for (int i = 0; i < 17; i++) print("{:4} ", fcount[i]);
+  println("lacount: {}", lacount);
+  println("");
 }
 
 void fail(const char *str, ...) {

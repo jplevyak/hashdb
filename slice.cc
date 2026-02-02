@@ -76,7 +76,7 @@ Slice::Slice(HDB *ahdb, int aislice, const char *alayout_pathname, uint64_t alay
   if ((fd_ = ::open(pathname_, O_CREAT | O_RDWR | O_DIRECT, S_IRUSR | S_IWUSR)) < 0)
     fail("unable to open '%s'", pathname_);
   if (::fstat(fd_, &stat_buf)) fail("unable to stat '%s'", pathname_);
-  block_size_ = SAFE_SECTOR_SIZE;
+  block_size_ = SAFE_BLOCK_SIZE;
   if (!is_raw_) {
     if ((stat_buf.st_mode & S_IFMT) != S_IFREG) fail("bad file type '%s'", pathname_);
     size_ = stat_buf.st_size;
@@ -103,7 +103,7 @@ Slice::Slice(HDB *ahdb, int aislice, const char *alayout_pathname, uint64_t alay
     }
     size_ = layout_size_;
   }
-  size_ = ROUND_DOWN_SAFE_SECTOR_SIZE(size_);
+  size_ = ROUND_DOWN_SAFE_BLOCK_SIZE(size_);
 }
 
 int Slice::init() {
