@@ -157,7 +157,6 @@ int HashDB::open(int options) {
   HDB *hdb = ((HDB *)this);
   hdb->read_only_ = (options & HDB_READ_ONLY) ? true : false;
   hdb->check_hash_ = (options & HDB_CHECK_HASH) ? true : false;
-  int res = 0;
   assert(hdb->reinit_on_open_error_ == false);
   assert(hdb->separate_db_per_slice_ == true);
   assert(hdb->replication_factor_ == 0);

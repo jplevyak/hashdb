@@ -1,10 +1,10 @@
 #include "blake3_impl.h"
 
-static INLINE uint32_t rotr32(uint32_t w, uint32_t c) {
+INLINE uint32_t rotr32(uint32_t w, uint32_t c) {
   return (w >> c) | (w << (32 - c));
 }
 
-static INLINE void g(uint32_t *state, size_t a, size_t b, size_t c, size_t d,
+INLINE void g(uint32_t *state, size_t a, size_t b, size_t c, size_t d,
               uint32_t x, uint32_t y) {
   state[a] = state[a] + state[b] + x;
   state[d] = rotr32(state[d] ^ state[a], 16);
@@ -16,7 +16,7 @@ static INLINE void g(uint32_t *state, size_t a, size_t b, size_t c, size_t d,
   state[b] = rotr32(state[b] ^ state[c], 7);
 }
 
-static INLINE void round_fn(uint32_t state[16], const uint32_t *msg, size_t round) {
+INLINE void round_fn(uint32_t state[16], const uint32_t *msg, size_t round) {
   const uint8_t *schedule = MSG_SCHEDULE[round];
   g(state, 0, 4, 8, 12, msg[schedule[0]], msg[schedule[1]]);
   g(state, 1, 5, 9, 13, msg[schedule[2]], msg[schedule[3]]);
@@ -28,7 +28,7 @@ static INLINE void round_fn(uint32_t state[16], const uint32_t *msg, size_t roun
   g(state, 3, 4, 9, 14, msg[schedule[14]], msg[schedule[15]]);
 }
 
-static INLINE void compress_pre(uint32_t state[16], const uint32_t cv[8],
+INLINE void compress_pre(uint32_t state[16], const uint32_t cv[8],
                          const uint8_t block[BLAKE3_BLOCK_LEN],
                          uint8_t block_len, uint64_t counter, uint8_t flags) {
   uint32_t block_words[16];
@@ -101,7 +101,7 @@ void blake3_compress_xof_portable(const uint32_t cv[8],
   store32(&out[15 * 4], state[15] ^ cv[7]);
 }
 
-static INLINE void hash_one_portable(const uint8_t *input, size_t blocks,
+INLINE void hash_one_portable(const uint8_t *input, size_t blocks,
                               const uint32_t key[8], uint64_t counter,
                               uint8_t flags, uint8_t flags_start,
                               uint8_t flags_end, uint8_t out[BLAKE3_OUT_LEN]) {
