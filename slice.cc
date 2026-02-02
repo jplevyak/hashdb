@@ -142,8 +142,8 @@ int Slice::might_exist(uint64_t key) {
     if (g->lookaside_.n_) {
       Lookaside *la = &g->lookaside_.v_[(h % g->lookaside_.n_) * 4];
       for (int a = 0; a < 4; a++) {
-        if (key == la[a].key) {
-          if (!la[a].index.next) {
+        if (key == la[a].key_) {
+          if (!la[a].index_.next_) {
             return 1;
           }
         }
@@ -151,13 +151,13 @@ int Slice::might_exist(uint64_t key) {
     }
     foreach_contiguous_element(g.get(), e, b, tmp) {
       Index *i = g->index(e);
-      if (i->tag == tag && i->size) {
+      if (i->tag_ == tag && i->size_) {
         return 1;
       }
     }
     foreach_overflow_element(g.get(), e, b, tmp) {
       Index *i = g->index(e);
-      if (i->tag == tag && i->size) {
+      if (i->tag_ == tag && i->size_) {
         return 1;
       }
     }

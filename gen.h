@@ -68,7 +68,7 @@ class Gen {
 
   HDB *hdb();
   int sectors() { return (buckets_ + (BUCKETS_PER_SECTOR - 1)) / BUCKETS_PER_SECTOR; }
-  int log_phase() { return header_->index_serial & 1; }
+  int log_phase() { return header_->index_serial_ & 1; }
 
   void alloc_header();
   void init_header();

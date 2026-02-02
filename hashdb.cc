@@ -189,11 +189,11 @@ int HashDB::read(uint64_t key, std::vector<Extent> &hit) {
 int HashDB::next(uint64_t key, void *old_data, std::vector<Extent> &hit) {
   HDB *hdb = ((HDB *)this);
   Data *d = PTR_TO_DATA(old_data);
-  if (d->magic != DATA_MAGIC) return -1;
-  if ((int)d->slice >= hdb->slice_.size()) return -1;
-  Slice *s = hdb->slice_[d->slice].get();
-  if ((int)d->gen >= s->gen_.size()) return -1;
-  Gen *g = s->gen_[d->gen].get();
+  if (d->magic_ != DATA_MAGIC) return -1;
+  if ((int)d->slice_ >= hdb->slice_.size()) return -1;
+  Slice *s = hdb->slice_[d->slice_].get();
+  if ((int)d->gen_ >= s->gen_.size()) return -1;
+  Gen *g = s->gen_[d->gen_].get();
   int r = 0;
   {
     std::lock_guard<std::mutex> lock(g->mutex_);
@@ -388,8 +388,8 @@ static inline void wait_for_write_commit(Gen *g, uint64_t wpos, int phase) {
 }
 
 static inline void wait_for_log_flush(Gen *g, int wait_msec) {
-  uint64_t wpos = g->header_->write_position;
-  int phase = g->header_->phase;
+  uint64_t wpos = g->header_->write_position_;
+  int phase = g->header_->phase_;
   auto startt = std::chrono::high_resolution_clock::now();
   auto donet = startt + std::chrono::milliseconds(wait_msec);
   while (std::chrono::high_resolution_clock::now() < donet &&
@@ -401,7 +401,7 @@ static inline void wait_for_log_flush(Gen *g, int wait_msec) {
     lock.release();
   }
   if (cmp_wpos(wpos, phase, g->committed_write_position_, g->committed_phase_) < 0) {
-    wait_for_write_commit(g, g->header_->write_position, g->header_->phase);
+    wait_for_write_commit(g, g->header_->write_position_, g->header_->phase_);
     g->write_log_buffer();
   }
 }
@@ -419,26 +419,26 @@ static void *do_remove_job(Writer *w) {
 int HashDB::remove(void *old_data, WriteCallback callback, SyncMode mode) {
   HDB *hdb = ((HDB *)this);
   Data *d = PTR_TO_DATA(old_data);
-  if (d->magic != DATA_MAGIC) return -1;
-  if ((int)d->slice >= hdb->slice_.size()) return -1;
-  Slice *s = hdb->slice_[d->slice].get();
-  if ((int)d->gen >= s->gen_.size()) return -1;
+  if (d->magic_ != DATA_MAGIC) return -1;
+  if ((int)d->slice_ >= hdb->slice_.size()) return -1;
+  Slice *s = hdb->slice_[d->slice_].get();
+  if ((int)d->gen_ >= s->gen_.size()) return -1;
   if (!callback) {
-    Gen *g = s->gen_[d->gen].get();
+    Gen *g = s->gen_[d->gen_].get();
     int r = 0;
     {
       std::lock_guard<std::mutex> lock(g->mutex_);
-      Index dindex(d->offset, 0, d->size, 1, d->phase);
-      Index iindex(d->offset, 0, d->size, 0, d->phase);
-      std::vector<uint64_t> keys(d->nkeys);
-      for (uint32_t j = 0; j < d->nkeys; j++) keys[j] = d->chain[j].key;
-      r = g->write_remove(keys.data(), d->nkeys, &dindex) | r;
-      for (int i = 0; i < (int)d->nkeys; i++)
+      Index dindex(d->offset_, 0, d->size_, 1, d->phase_);
+      Index iindex(d->offset_, 0, d->size_, 0, d->phase_);
+      std::vector<uint64_t> keys(d->nkeys_);
+      for (uint32_t j = 0; j < d->nkeys_; j++) keys[j] = d->chain_[j].key_;
+      r = g->write_remove(keys.data(), d->nkeys_, &dindex) | r;
+      for (int i = 0; i < (int)d->nkeys_; i++)
         if (!g->delete_lookaside(keys[i], &iindex)) g->insert_lookaside(keys[i], &dindex);
-      g->insert_log(keys.data(), d->nkeys, &dindex);
+      g->insert_log(keys.data(), d->nkeys_, &dindex);
       if (mode == SyncMode::Sync || mode == SyncMode::Flush) {
         if (mode == SyncMode::Flush) {
-          wait_for_write_commit(g, g->header_->write_position, g->header_->phase);
+          wait_for_write_commit(g, g->header_->write_position_, g->header_->phase_);
           if (g->lbuf_[g->cur_log_].start_ != g->lbuf_[g->cur_log_].cur_) g->write_log_buffer();
         } else
           wait_for_log_flush(g, hdb->sync_wait_msec_);
@@ -464,8 +464,8 @@ int HashDB::remove(void *old_data, WriteCallback callback, SyncMode mode) {
 
 int HashDB::get_keys(void *old_data, std::vector<uint64_t> &keys) {
   Data *d = PTR_TO_DATA(old_data);
-  if (d->magic == DATA_MAGIC) return -1;
-  for (int i = 0; i < (int)d->nkeys; i++) keys.push_back(d->chain[i].key);
+  if (d->magic_ == DATA_MAGIC) return -1;
+  for (int i = 0; i < (int)d->nkeys_; i++) keys.push_back(d->chain_[i].key_);
   return 0;
 }
 
@@ -570,7 +570,7 @@ int HashDB::free_chunk(void *ptr) {
 
 void hashdb_print_data_header(void *p) {
   Data *d = PTR_TO_DATA(p);
-  println("offset {} phase {} remove {}", d->offset, (int)d->phase, (int)d->remove);
+  println("offset {} phase {} remove {}", d->offset_, (int)d->phase_, (int)d->remove_);
 }
 
 /* Test functions accessing internal data
@@ -579,8 +579,8 @@ void hashdb_print_info(HashDB *dd) {
   HDB *d = (HDB *)dd;
   for (const auto &slice : d->slice_) {
     for (const auto &g : slice->gen_) {
-      std::cout << std::format("Slice {} Gen {} size {} phase {}", slice->islice_, g->igen_, g->header_->size,
-                               g->header_->phase)
+      std::cout << std::format("Slice {} Gen {} size {} phase {}", slice->islice_, g->igen_, g->header_->size_,
+                               g->header_->phase_)
                 << std::endl;
     }
   }
@@ -588,7 +588,7 @@ void hashdb_print_info(HashDB *dd) {
 
 uint64_t hashdb_write_position(HashDB *dd) {
   HDB *d = (HDB *)dd;
-  return d->slice_[0]->gen_[0]->header_->write_position;
+  return d->slice_[0]->gen_[0]->header_->write_position_;
 }
 
 void hashdb_index_fullness(HashDB *dd) {
@@ -602,7 +602,7 @@ void hashdb_index_fullness(HashDB *dd) {
     for (const auto &g : slice->gen_) {
       for (uint32_t b = 0; b < g->buckets_; b++) {
         x = 0;
-        foreach_contiguous_element(g.get(), e, b, tmp) if (g->index(e)->size) x++;
+        foreach_contiguous_element(g.get(), e, b, tmp) if (g->index(e)->size_) x++;
         assert(x < 9);
         bcount[x]++;
         x = 0;
@@ -618,7 +618,7 @@ void hashdb_index_fullness(HashDB *dd) {
           do {
             e = n;
             x++;
-            n = overflow_element(s, g->index(e)->next);
+            n = overflow_element(s, g->index(e)->next_);
           } while (e != n);
         }
         assert(x < 17);

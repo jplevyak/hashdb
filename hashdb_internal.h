@@ -144,113 +144,113 @@ static inline uint64_t size_to_length(uint64_t s) { return (s & 255) * ((1 << ((
 // Structures
 
 struct Header {
-  uint64_t magic;
-  uint32_t major_version;
-  uint32_t minor_version;
-  uint64_t write_position;
-  uint64_t write_serial;
-  uint64_t index_serial;
-  uint32_t phase;  // 0 or 1
+  uint64_t magic_;
+  uint32_t major_version_;
+  uint32_t minor_version_;
+  uint64_t write_position_;
+  uint64_t write_serial_;
+  uint64_t index_serial_;
+  uint32_t phase_;  // 0 or 1
   // configuration
-  uint32_t data_per_index;
-  uint64_t size;
-  uint32_t generations;
+  uint32_t data_per_index_;
+  uint64_t size_;
+  uint32_t generations_;
 };
 
 struct Index {
-  uint64_t offset : 32;  // ATOMIC_WRITE_SIZE * 2^32
-  uint64_t tag : 16;     // 64k/8 entries/bucket =~ .0122% collision
-  uint64_t size : 11;    // ATOMIC_WRITE_SIZE * 4k
-  uint64_t next : 4;     // 16 possible next entries, 1 == remove in log/lookaside
-  uint64_t phase : 1;
+  uint64_t offset_ : 32;  // ATOMIC_WRITE_SIZE * 2^32
+  uint64_t tag_ : 16;     // 64k/8 entries/bucket =~ .0122% collision
+  uint64_t size_ : 11;    // ATOMIC_WRITE_SIZE * 4k
+  uint64_t next_ : 4;     // 16 possible next entries, 1 == remove in log/lookaside
+  uint64_t phase_ : 1;
   Index(uint32_t aoffset, uint16_t atag, uint32_t asize, uint32_t anext, uint32_t aphase)
-      : offset(aoffset), tag(atag), size(asize), next(anext), phase(aphase) {}
+      : offset_(aoffset), tag_(atag), size_(asize), next_(anext), phase_(aphase) {}
   Index(Index *i) { *(uint64_t *)this = *(uint64_t *)i; }
   Index() {}
   operator bool() { return !!(*(uint64_t *)this); }
 };
 
 struct Lookaside {
-  uint64_t key;
-  Index index;
+  uint64_t key_;
+  Index index_;
   // normally index.next is 0, however, for deleted elements, next == 1
   Lookaside(int zero = 0) { memset((void *)this, 0, sizeof(*this)); }
-  operator bool() { return index.size != 0; }
+  operator bool() { return index_.size_ != 0; }
 };
 
 class LookasideHashFns {
  public:
-  static uint32_t hash(Lookaside a) { return ((uint32_t)(a.key >> 32) ^ ((uint32_t)a.key)); }
+  static uint32_t hash(Lookaside a) { return ((uint32_t)(a.key_ >> 32) ^ ((uint32_t)a.key_)); }
   static int equal(Lookaside a, Lookaside b) {
-    return a.key == b.key && a.index.offset == b.index.offset &&  // size will mismatch on removes
-           a.index.next == b.index.next && a.index.phase == b.index.phase;
+    return a.key_ == b.key_ && a.index_.offset_ == b.index_.offset_ &&  // size will mismatch on removes
+           a.index_.next_ == b.index_.next_ && a.index_.phase_ == b.index_.phase_;
   }
 };
 
 typedef NBlockHash<Lookaside, LookasideHashFns> LookasideCache;
 
 struct LogHeader {
-  uint64_t magic;
-  uint64_t last_write_position;
-  uint64_t write_position;
-  uint64_t last_write_serial;
-  uint64_t write_serial;
-  uint32_t length;
-  uint32_t size;
-  uint32_t initial_phase;
-  uint32_t final_phase;
-  uint8_t hash[32];
+  uint64_t magic_;
+  uint64_t last_write_position_;
+  uint64_t write_position_;
+  uint64_t last_write_serial_;
+  uint64_t write_serial_;
+  uint32_t length_;
+  uint32_t size_;
+  uint32_t initial_phase_;
+  uint32_t final_phase_;
+  uint8_t hash_[32];
 };
 
 struct LogEntry {
-  uint32_t reserved;
-  uint32_t nkeys;
-  int size() { return sizeof(LogEntry) + sizeof(Index) + sizeof(uint64_t) * nkeys; }
+  uint32_t reserved_;
+  uint32_t nkeys_;
+  int size() { return sizeof(LogEntry) + sizeof(Index) + sizeof(uint64_t) * nkeys_; }
   Index *index() { return (Index *)(((char *)this) + sizeof(LogEntry)); }
   uint64_t *keys() { return (uint64_t *)(((char *)this) + sizeof(LogEntry) + sizeof(Index)); }
 };
 
 struct KeyChain {
-  uint64_t key;
-  Index next;
+  uint64_t key_;
+  Index next_;
 };
 
 struct Data {
-  uint64_t magic;
-  uint64_t length;
-  uint64_t write_serial;  // do not move these relative to each other
-  uint32_t slice : 20;
-  uint32_t gen : 8;
-  uint32_t reserved1 : 4;
-  uint32_t offset;  // this needs to be above the flags for "clear flags" below to work
-  uint32_t size : 11;
-  uint32_t remove : 1;
-  uint32_t phase : 1;
-  uint32_t padding : 1;     // write_serial does not increment
-  uint32_t reserved2 : 18;  // do not move these relative to each other
-  uint32_t nkeys;
-  uint8_t hash[32];
-  KeyChain chain[1];
+  uint64_t magic_;
+  uint64_t length_;
+  uint64_t write_serial_;  // do not move these relative to each other
+  uint32_t slice_ : 20;
+  uint32_t gen_ : 8;
+  uint32_t reserved1_ : 4;
+  uint32_t offset_;  // this needs to be above the flags for "clear flags" below to work
+  uint32_t size_ : 11;
+  uint32_t remove_ : 1;
+  uint32_t phase_ : 1;
+  uint32_t padding_ : 1;     // write_serial does not increment
+  uint32_t reserved2_ : 18;  // do not move these relative to each other
+  uint32_t nkeys_;
+  uint8_t hash_[32];
+  KeyChain chain_[1];
 };
 
 struct DataFooter {
-  uint32_t nkeys;
+  uint32_t nkeys_;
 };
 
-#define DATA_TO_PTR(_d) (((char *)_d) + (sizeof(Data) + sizeof(KeyChain) * (_d->nkeys - 1) + sizeof(DataFooter)))
-#define PTR_TO_DATA(_p)                                                                                            \
-  ((Data *)(((char *)_p) -                                                                                         \
-            ((sizeof(Data) + sizeof(KeyChain) * (((DataFooter *)(((char *)_p) - sizeof(DataFooter)))->nkeys - 1) + \
+#define DATA_TO_PTR(_d) (((char *)_d) + (sizeof(Data) + sizeof(KeyChain) * (_d->nkeys_ - 1) + sizeof(DataFooter)))
+#define PTR_TO_DATA(_p)                                                                                             \
+  ((Data *)(((char *)_p) -                                                                                          \
+            ((sizeof(Data) + sizeof(KeyChain) * (((DataFooter *)(((char *)_p) - sizeof(DataFooter)))->nkeys_ - 1) + \
               sizeof(DataFooter)))))
-#define DATA_TO_FOOTER(_d) ((DataFooter *)(((char *)_d) + (sizeof(Data) + sizeof(KeyChain) * (_d->nkeys - 1))))
+#define DATA_TO_FOOTER(_d) ((DataFooter *)(((char *)_d) + (sizeof(Data) + sizeof(KeyChain) * (_d->nkeys_ - 1))))
 
 struct DebugLogEntry {
-  uint64_t key;
-  uint64_t ptr;
-  void set_tag(uint64_t t) { ptr = (ptr & DEBUG_LOG_PTR_MASK) + (t << DEBUG_LOG_TAG_SHIFT); }
-  int get_tag() { return (int)(ptr >> DEBUG_LOG_TAG_SHIFT); }
-  void set_i(Index *i) { ptr = (((uintptr_t)i) & DEBUG_LOG_PTR_MASK) + (ptr & ~DEBUG_LOG_PTR_MASK); }
-  Index *get_i() { return (Index *)(uintptr_t)(ptr & DEBUG_LOG_PTR_MASK); }
+  uint64_t key_;
+  uint64_t ptr_;
+  void set_tag(uint64_t t) { ptr_ = (ptr_ & DEBUG_LOG_PTR_MASK) + (t << DEBUG_LOG_TAG_SHIFT); }
+  int get_tag() { return (int)(ptr_ >> DEBUG_LOG_TAG_SHIFT); }
+  void set_i(Index *i) { ptr_ = (((uintptr_t)i) & DEBUG_LOG_PTR_MASK) + (ptr_ & ~DEBUG_LOG_PTR_MASK); }
+  Index *get_i() { return (Index *)(uintptr_t)(ptr_ & DEBUG_LOG_PTR_MASK); }
 };
 
 // Helper macros for Index
@@ -266,18 +266,18 @@ struct DebugLogEntry {
 
 #define overflow_element(_s, _i) (sector_to_first_element(_s) + (BUCKETS_PER_SECTOR * ELEMENTS_PER_BUCKET) + (_i))
 #define overflow_element_number(_e) ((_e) - (BUCKETS_PER_SECTOR * ELEMENTS_PER_BUCKET))
-#define overflow_present(_b) index(bucket_to_first_element(_b))->next
-#define overflow_head(_b) index((bucket_to_first_element(_b) + 1))->next
-#define overflow_head_element(_b) overflow_element((bucket_to_first_element(_b) + 1)->next)
-#define freelist_present(_s) index(sector_to_first_element(_s) + 2)->next
-#define freelist_head(_s) index(sector_to_first_element(_s) + 3)->next
+#define overflow_present(_b) index(bucket_to_first_element(_b))->next_
+#define overflow_head(_b) index((bucket_to_first_element(_b) + 1))->next_
+#define overflow_head_element(_b) overflow_element((bucket_to_first_element(_b) + 1)->next_)
+#define freelist_present(_s) index(sector_to_first_element(_s) + 2)->next_
+#define freelist_head(_s) index(sector_to_first_element(_s) + 3)->next_
 #define freelist_head_element(_s) overflow_element(_s, freelist_head(_s))
 
 #define copy_index(x, y)                 \
   do {                                   \
-    uint32_t n = (x)->next;              \
+    uint64_t n = (x)->next_;             \
     *(uint64_t *)(x) = *(uint64_t *)(y); \
-    (x)->next = n;                       \
+    (x)->next_ = n;                      \
   } while (0)
 
 #define foreach_contiguous_element(_gen, _elem, _bucket, _tmp) \
@@ -286,4 +286,5 @@ struct DebugLogEntry {
 #define foreach_overflow_element(_gen, _elem, _bucket, _tmp)                                                 \
   if ((_gen)->overflow_present(_bucket))                                                                     \
     for (int _elem = overflow_element(bucket_to_sector(_bucket), (_gen)->overflow_head(_bucket)), _tmp = -1; \
-         _elem != _tmp; _tmp = _elem, _elem = overflow_element(bucket_to_sector(_bucket), (_gen)->index(_elem)->next))
+         _elem != _tmp;                                                                                      \
+         _tmp = _elem, _elem = overflow_element(bucket_to_sector(_bucket), (_gen)->index(_elem)->next_))
