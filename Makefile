@@ -96,9 +96,6 @@ endif
 
 BUILD_VERSION = $(shell git show-ref 2> /dev/null | head -1 | cut -d ' ' -f 1)
 VERSIONCFLAGS += -DMAJOR_VERSION=$(MAJOR) -DMINOR_VERSION=$(MINOR) -DBUILD_VERSION=\"$(BUILD_VERSION)\"
-
-
-
 COMMON_FLAGS += -Wall -Wno-strict-aliasing -MMD -MP
 # debug flags
 ifdef DEBUG
