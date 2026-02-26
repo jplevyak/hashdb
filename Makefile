@@ -128,7 +128,7 @@ LIB_OBJS = $(LIB_SRCS:%.cc=%.o) $(LIB_CSRCS:%.c=%.o)
 TEST_LIB_SRCS = test.cc
 TEST_LIB_OBJS = $(TEST_LIB_SRCS:%.cc=%.o)
 
-EXECUTABLE_FILES =
+EXECUTABLE_FILES = hashdb-cli
 LIBRARY = lib$(MODULE).a
 INSTALL_LIBRARIES = lib$(MODULE).a
 INCLUDES =
@@ -142,7 +142,7 @@ EXECUTABLES = $(EXECUTABLE_FILES)
 TEST_EXEC = test_$(MODULE)
 endif
 
-ALL_SRCS = $(LIB_SRCS) $(LIB_SRCS) $(TEST_LIB_SRCS)
+ALL_SRCS = $(LIB_SRCS) $(TEST_LIB_SRCS) hashdb-cli.cc
 DEPEND_SRCS = $(ALL_SRCS)
 DEPS = $(ALL_SRCS:%.cc=%.d) $(LIB_CSRCS:%.c=%.d)
 
@@ -162,6 +162,9 @@ $(LIBRARY):  $(LIB_OBJS)
 
 $(TEST_EXEC): test.o $(LIB_OBJS)
 	$(CXX) $(CXXFLAGS) -DTEST_LIB=1 test.o $(LDFLAGS) $(LIB_OBJS) -o $@ $(LIBS)
+
+hashdb-cli: hashdb-cli.o $(LIB_OBJS)
+	$(CXX) $(CXXFLAGS) hashdb-cli.o $(LDFLAGS) $(LIB_OBJS) -o $@ $(LIBS)
 
 LICENSE.i: LICENSE
 	rm -f LICENSE.i

@@ -97,6 +97,7 @@ const static char *DEBUG_LOG_TYPE_NAME[] = {"empty ", "set   ", "delete ", "ins 
                                             "del la", "inskey", "delkey",  "write "};
 
 void Gen::dump_debug_log() {
+  if (!debug_log_) return;
   char *p = debug_log_;
   while (p - debug_log_ + sizeof(DebugLogEntry) < DEBUG_LOG_SIZE) {
     DebugLogEntry *e = (DebugLogEntry *)p;

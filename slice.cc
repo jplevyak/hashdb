@@ -39,20 +39,27 @@ Slice::Slice(HDB *ahdb, int aislice, const char *alayout_pathname, uint64_t alay
   size_ = 0;
   is_raw_ = is_file_ = is_dir_ = 0;
 
-  if (stat(layout_pathname_, &stat_buf)) fail("unable to stat '%s'", layout_pathname_);
-  switch (stat_buf.st_mode & S_IFMT) {
-    case S_IFBLK:
-    case S_IFCHR:
-      is_raw_ = 1;
-      break;
-    case S_IFDIR:
-      is_dir_ = 1;
-      break;
-    case S_IFREG:
+  if (stat(layout_pathname_, &stat_buf)) {
+    if (errno == ENOENT) {
       is_file_ = 1;
-      break;
-    default:
-      fail("unknown stat result '%s'", pathname_);
+    } else {
+      fail("unable to stat '%s'", layout_pathname_);
+    }
+  } else {
+    switch (stat_buf.st_mode & S_IFMT) {
+      case S_IFBLK:
+      case S_IFCHR:
+        is_raw_ = 1;
+        break;
+      case S_IFDIR:
+        is_dir_ = 1;
+        break;
+      case S_IFREG:
+        is_file_ = 1;
+        break;
+      default:
+        fail("unknown stat result '%s'", layout_pathname_);
+    }
   }
   if (is_file_)
     pathname_ = layout_pathname_;
